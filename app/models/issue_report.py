@@ -1,4 +1,4 @@
-"""IssueReport ORM model – stores critical issues reported during a checklist step."""
+"""IssueReport ORM model."""
 
 from datetime import datetime
 from typing import Optional
@@ -24,6 +24,8 @@ class IssueReport(Base):
     )
     checklist_id: Mapped[str] = mapped_column(String(50), nullable=False)
     step_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # "critical" → pauses checklist | "operational" → logs and continues
+    issue_type: Mapped[str] = mapped_column(String(20), default="operational", nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     reported_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), default=datetime.utcnow

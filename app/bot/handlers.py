@@ -10,6 +10,7 @@ from app.bot.notifier import (
     MANAGER_KEYBOARD,
     answer_callback_query,
     delete_message,
+    edit_message_reply_markup,
     notify_manager,
     send_photo_to_manager,
     send_step_message,
@@ -21,6 +22,7 @@ from app.services.checklist_engine import (
     handle_abandon,
     handle_issue_report,
     progress_step,
+    resume_checklist_for_staff,
     start_checklist,
 )
 from app.services.manager_service import (
@@ -30,14 +32,15 @@ from app.services.manager_service import (
     get_today_staff_status,
     resolve_issue,
 )
-from app.services.session_service import save_last_message_id
+from app.services.session_service import save_last_message_id, get_active_session
 
 logger = logging.getLogger(__name__)
 
-# Tracks staff mid-issue-report flow waiting to type their description
-_awaiting_issue_description: dict[str, bool] = {}
+# chat_id → issue type selection pending ("critical" | "operational")
+_awaiting_issue_type: dict[str, bool] = {}
+# chat_id → waiting for description text after type was chosen
+_awaiting_issue_description: dict[str, str] = {}  # value = issue_type
 
-# Maps reply keyboard button text to checklist commands
 KEYBOARD_COMMAND_MAP = {
     "🍳 Kitchen Opening": "kitchen opening",
     "🔒 Kitchen Closing": "kitchen closing",
@@ -59,10 +62,10 @@ MANAGER_WELCOME_MESSAGE = (
 HELP_MESSAGE = (
     "📋 <b>Sigmo Checklist Bot</b>\n\n"
     "<b>Available checklists:</b>\n"
-    "🍳 /kitchen_opening – Kitchen Opening\n"
-    "🔒 /kitchen_closing – Kitchen Closing\n"
-    "🍽️ /dining_opening – Dining Opening\n"
-    "🔒 /dining_closing – Dining Closing\n\n"
+    "🍳 Kitchen Opening\n"
+    "🔒 Kitchen Closing\n"
+    "🍽️ Dining Opening\n"
+    "🔒 Dining Closing\n\n"
     "<b>During a checklist:</b>\n"
     "• Tap <b>✅ Done</b> to complete a step\n"
     "• Tap <b>⚠️ Report Issue</b> to flag a problem\n"
@@ -73,7 +76,6 @@ HELP_MESSAGE = (
 
 
 async def process_update(data: dict) -> None:
-    """Process a single Telegram update."""
     with webhook_latency.time():
         callback_query = data.get("callback_query")
         if callback_query:
@@ -88,23 +90,23 @@ async def process_update(data: dict) -> None:
         text = (message.get("text") or "").strip()
         photo_list = message.get("photo")
 
-        # Normalize keyboard button taps to their command equivalents
         if text in KEYBOARD_COMMAND_MAP:
             text = KEYBOARD_COMMAND_MAP[text]
 
         factory = get_async_session()
         async with factory() as db:
-            # Check if this user is a manager
             manager = await get_manager_by_chat_id(db, chat_id)
             if manager:
                 await _handle_manager_message(db, chat_id, text, manager)
                 return
 
-            # Staff flow
-            if _awaiting_issue_description.get(chat_id):
-                _awaiting_issue_description.pop(chat_id)
-                await _handle_issue_description(db, chat_id, text)
-            elif photo_list:
+            # Staff: waiting for issue description
+            if chat_id in _awaiting_issue_description:
+                issue_type = _awaiting_issue_description.pop(chat_id)
+                await _handle_issue_description(db, chat_id, text, issue_type)
+                return
+
+            if photo_list:
                 await _handle_photo(db, chat_id, photo_list)
             elif text.lower() in ("/cancel", "cancel"):
                 await _handle_abandon(db, chat_id)
@@ -127,52 +129,35 @@ async def process_update(data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 async def _handle_manager_message(db: AsyncSession, chat_id: str, text: str, manager) -> None:
-    """Route manager messages to appropriate handlers."""
     if text.lower() in ("/start", "/help"):
         await send_telegram_message(chat_id, MANAGER_WELCOME_MESSAGE, reply_markup=MANAGER_KEYBOARD)
         return
 
     if text in ("👥 Staff Status", "/status"):
-        status_msg = await get_today_staff_status(db, manager.restaurant_id)
-        await send_telegram_message(chat_id, status_msg, reply_markup=MANAGER_KEYBOARD)
+        msg = await get_today_staff_status(db, manager.restaurant_id)
+        await send_telegram_message(chat_id, msg, reply_markup=MANAGER_KEYBOARD)
         return
 
     if text in ("⚠️ Open Issues", "/issues"):
         issues = await get_open_issues(db, manager.restaurant_id)
         if not issues:
-            await send_telegram_message(
-                chat_id,
-                "✅ No open issues right now.",
-                reply_markup=MANAGER_KEYBOARD,
-            )
+            await send_telegram_message(chat_id, "✅ No open issues right now.", reply_markup=MANAGER_KEYBOARD)
             return
         msgs = await build_issues_messages(db, issues)
         for m in msgs:
             await send_telegram_message(chat_id, m["text"], reply_markup=m["reply_markup"])
         return
 
-    # Fallback
     await send_telegram_message(
-        chat_id,
-        "Use the buttons below to manage your team.",
-        reply_markup=MANAGER_KEYBOARD,
+        chat_id, "Use the buttons below to manage your team.", reply_markup=MANAGER_KEYBOARD
     )
 
 
 # ---------------------------------------------------------------------------
-# Staff handlers
+# Callback query handler (inline buttons)
 # ---------------------------------------------------------------------------
 
-async def _handle_system_command(chat_id: str, command: str) -> None:
-    """Handle /start and /help for staff."""
-    if command == "/start":
-        await send_telegram_message(chat_id, WELCOME_MESSAGE, reply_markup=CHECKLIST_KEYBOARD)
-    elif command == "/help":
-        await send_telegram_message(chat_id, HELP_MESSAGE, reply_markup=CHECKLIST_KEYBOARD)
-
-
 async def _handle_callback_query(callback_query: dict) -> None:
-    """Handle inline button taps (staff Done/Report Issue + manager Resolve)."""
     callback_id = callback_query["id"]
     chat_id = str(callback_query["from"]["id"])
     data = callback_query.get("data", "")
@@ -180,40 +165,102 @@ async def _handle_callback_query(callback_query: dict) -> None:
 
     factory = get_async_session()
     async with factory() as db:
-        # Manager: resolve issue
+
+        # ── Manager: resolve operational issue ─────────────────────────────
         if data.startswith("resolve_issue:"):
             issue_id = int(data.split(":")[1])
             issue = await resolve_issue(db, issue_id, chat_id)
             if issue:
-                await answer_callback_query(callback_id, "✅ Issue marked as resolved")
-                # Remove the inline button from the issue message
-                from app.bot.notifier import edit_message_reply_markup
+                await answer_callback_query(callback_id, "✅ Issue resolved")
                 await edit_message_reply_markup(chat_id, message_id, reply_markup={"inline_keyboard": []})
-                # Append resolved note to the message by sending a follow-up
                 await send_telegram_message(
                     chat_id,
-                    f"✅ <b>Issue #{issue.id} resolved</b> by you at {issue.resolved_at.strftime('%I:%M %p')}",
+                    f"✅ <b>Issue #{issue.id} resolved</b> at {issue.resolved_at.strftime('%I:%M %p')}",
                     reply_markup=MANAGER_KEYBOARD,
                 )
             else:
                 await answer_callback_query(callback_id, "Issue not found.")
             return
 
-        # Staff: done
+        # ── Manager: resolve critical issue + resume staff ─────────────────
+        if data.startswith("resolve_resume:"):
+            _, issue_id_str, staff_chat_id = data.split(":")
+            issue_id = int(issue_id_str)
+            issue = await resolve_issue(db, issue_id, chat_id)
+            if issue:
+                await answer_callback_query(callback_id, "✅ Resolved – resuming staff")
+                await edit_message_reply_markup(chat_id, message_id, reply_markup={"inline_keyboard": []})
+                await send_telegram_message(
+                    chat_id,
+                    f"✅ <b>Issue #{issue.id} resolved.</b> Staff checklist has been resumed.",
+                    reply_markup=MANAGER_KEYBOARD,
+                )
+                # Resume the staff session and notify them
+                resume_result = await resume_checklist_for_staff(db, staff_chat_id)
+                if resume_result.get("reply"):
+                    msg_id = await send_step_message(staff_chat_id, resume_result["reply"]) \
+                        if resume_result.get("use_buttons") \
+                        else await send_telegram_message(staff_chat_id, resume_result["reply"])
+                    if msg_id and resume_result.get("session"):
+                        await save_last_message_id(db, resume_result["session"], msg_id)
+            else:
+                await answer_callback_query(callback_id, "Issue not found.")
+            return
+
+        # ── Staff: issue type selection ────────────────────────────────────
+        if data == "issue_type_critical":
+            await answer_callback_query(callback_id, "🔴 Critical issue selected")
+            await edit_message_reply_markup(chat_id, message_id, reply_markup={"inline_keyboard": []})
+            _awaiting_issue_description[chat_id] = "critical"
+            await send_telegram_message(
+                chat_id,
+                "🔴 <b>Critical Issue</b>\n\nDescribe the issue (e.g. gas leak, power outage, fire).\nYour checklist will be paused until your manager resolves it.",
+            )
+            return
+
+        if data == "issue_type_operational":
+            await answer_callback_query(callback_id, "🟡 Operational issue selected")
+            await edit_message_reply_markup(chat_id, message_id, reply_markup={"inline_keyboard": []})
+            _awaiting_issue_description[chat_id] = "operational"
+            await send_telegram_message(
+                chat_id,
+                "🟡 <b>Operational Issue</b>\n\nDescribe the issue (e.g. broken equipment, missing item).\nThe checklist will continue after logging.",
+            )
+            return
+
+        # ── Staff: done ────────────────────────────────────────────────────
         if data == "done":
             await answer_callback_query(callback_id, "✅ Marked as done")
             await _handle_done(db, chat_id, inline_message_id=message_id)
             return
 
-        # Staff: report issue
+        # ── Staff: report issue → show type selection ──────────────────────
         if data == "report_issue":
-            await answer_callback_query(callback_id, "⚠️ Describe the issue")
-            _awaiting_issue_description[chat_id] = True
+            await answer_callback_query(callback_id, "⚠️ Select issue type")
             await send_telegram_message(
                 chat_id,
-                "⚠️ <b>Report Issue</b>\n\nPlease describe the issue and send it as a message.",
+                "⚠️ <b>Report Issue</b>\n\nWhat type of issue is this?",
+                reply_markup={
+                    "inline_keyboard": [
+                        [
+                            {"text": "🔴 Critical", "callback_data": "issue_type_critical"},
+                            {"text": "🟡 Operational", "callback_data": "issue_type_operational"},
+                        ]
+                    ]
+                },
             )
             return
+
+
+# ---------------------------------------------------------------------------
+# Staff message handlers
+# ---------------------------------------------------------------------------
+
+async def _handle_system_command(chat_id: str, command: str) -> None:
+    if command == "/start":
+        await send_telegram_message(chat_id, WELCOME_MESSAGE, reply_markup=CHECKLIST_KEYBOARD)
+    elif command == "/help":
+        await send_telegram_message(chat_id, HELP_MESSAGE, reply_markup=CHECKLIST_KEYBOARD)
 
 
 async def _handle_command(db: AsyncSession, chat_id: str, text: str) -> None:
@@ -239,7 +286,6 @@ async def _handle_done(
 ) -> None:
     result = await progress_step(db, chat_id, is_photo=False)
 
-    # Delete the previous step message
     del_id = result.get("delete_message_id") or inline_message_id
     if del_id:
         await delete_message(chat_id, del_id)
@@ -247,20 +293,18 @@ async def _handle_done(
     if result["reply"]:
         if result.get("use_buttons"):
             msg_id = await send_step_message(chat_id, result["reply"])
-            # Persist new message_id into the session
             if msg_id:
-                from app.services.session_service import get_active_session
                 session = await get_active_session(db, chat_id)
                 if session:
                     await save_last_message_id(db, session, msg_id)
         else:
             await send_telegram_message(chat_id, result["reply"], reply_markup=CHECKLIST_KEYBOARD)
 
-    if result.get("photo_to_manager") and result["manager_chat_id"]:
+    if result.get("photo_to_manager") and result.get("manager_chat_id"):
         p = result["photo_to_manager"]
         await send_photo_to_manager(result["manager_chat_id"], p["file_id"], p["caption"] or "")
 
-    if result["manager_msg"]:
+    if result.get("manager_msg"):
         await notify_manager(result["manager_chat_id"], result["manager_msg"])
 
 
@@ -268,7 +312,6 @@ async def _handle_photo(db: AsyncSession, chat_id: str, photo_list: list) -> Non
     file_id = photo_list[-1]["file_id"]
     result = await progress_step(db, chat_id, is_photo=True, file_id=file_id)
 
-    # Delete the previous step message
     if result.get("delete_message_id"):
         await delete_message(chat_id, result["delete_message_id"])
 
@@ -276,19 +319,16 @@ async def _handle_photo(db: AsyncSession, chat_id: str, photo_list: list) -> Non
         if result.get("use_buttons"):
             msg_id = await send_step_message(chat_id, result["reply"])
             if msg_id:
-                from app.services.session_service import get_active_session
                 session = await get_active_session(db, chat_id)
                 if session:
                     await save_last_message_id(db, session, msg_id)
         else:
             await send_telegram_message(chat_id, result["reply"], reply_markup=CHECKLIST_KEYBOARD)
 
-    # Forward photo to manager
-    if result.get("photo_to_manager") and result["manager_chat_id"]:
+    if result.get("photo_to_manager") and result.get("manager_chat_id"):
         p = result["photo_to_manager"]
         await send_photo_to_manager(result["manager_chat_id"], p["file_id"], p["caption"] or "")
-
-    if result["manager_msg"] and not result.get("photo_to_manager"):
+    elif result.get("manager_msg"):
         await notify_manager(result["manager_chat_id"], result["manager_msg"])
 
 
@@ -305,15 +345,16 @@ async def _handle_abandon(db: AsyncSession, chat_id: str) -> None:
         await notify_manager(result.get("manager_chat_id"), result["manager_msg"])
 
 
-async def _handle_issue_description(db: AsyncSession, chat_id: str, description: str) -> None:
-    if not description:
-        await send_telegram_message(chat_id, "⚠️ Issue description cannot be empty. Please describe the issue.")
-        _awaiting_issue_description[chat_id] = True
+async def _handle_issue_description(
+    db: AsyncSession, chat_id: str, description: str, issue_type: str
+) -> None:
+    if not description.strip():
+        await send_telegram_message(chat_id, "⚠️ Description cannot be empty. Please describe the issue.")
+        _awaiting_issue_description[chat_id] = issue_type
         return
 
-    result = await handle_issue_report(db, chat_id, description)
+    result = await handle_issue_report(db, chat_id, description, issue_type)
 
-    # Delete the old step message and re-send it with buttons
     if result.get("delete_message_id"):
         await delete_message(chat_id, result["delete_message_id"])
 
@@ -321,12 +362,11 @@ async def _handle_issue_description(db: AsyncSession, chat_id: str, description:
         if result.get("use_buttons"):
             msg_id = await send_step_message(chat_id, result["reply"])
             if msg_id:
-                from app.services.session_service import get_active_session
                 session = await get_active_session(db, chat_id)
                 if session:
                     await save_last_message_id(db, session, msg_id)
         else:
             await send_telegram_message(chat_id, result["reply"], reply_markup=CHECKLIST_KEYBOARD)
 
-    if result["manager_msg"]:
+    if result.get("manager_msg"):
         await notify_manager(result["manager_chat_id"], result["manager_msg"])

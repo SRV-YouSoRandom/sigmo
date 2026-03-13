@@ -1,30 +1,35 @@
-## Seed SQL Commands
+# Sigmo – Seed SQL Commands
 
-### 1. Add restaurant
+## 1. Restaurant
 
 ```sql
-INSERT INTO restaurants (restaurant_id, name, manager_chat_id)
-VALUES ('R001', 'My Restaurant', '<manager_telegram_chat_id>');
+INSERT INTO restaurants (restaurant_id, name, branch, manager_chat_id, opening_reminder_time, closing_reminder_time, reminder_followup_minutes)
+VALUES (
+  'R001',
+  'My Restaurant',
+  'Makati',                  -- branch name, or NULL if not needed
+  '<manager_telegram_chat_id>',
+  '10:00',                   -- opening reminder time (24h, UTC). NULL to disable.
+  '22:00',                   -- closing reminder time (24h, UTC). NULL to disable.
+  20                         -- minutes after reminder to send follow-up if not started
+);
 ```
 
-### 2. Add manager
-
--- The manager's chat_id must also be in the managers table so the bot
--- gives them the manager UI instead of the staff UI.
+## 2. Manager
 
 ```sql
 INSERT INTO managers (chat_id, name, restaurant_id)
 VALUES ('<manager_telegram_chat_id>', 'Manager Name', 'R001');
 ```
 
-### 3. Add staff (repeat for each staff member)
+## 3. Staff (repeat for each person)
 
 ```sql
 INSERT INTO staff (chat_id, name, restaurant_id)
 VALUES ('<staff_telegram_chat_id>', 'Staff Name', 'R001');
 ```
 
-### 4. Dining Opening checklist steps
+## 4. Dining Opening checklist steps
 
 ```sql
 INSERT INTO checklist_steps (restaurant_id, checklist_id, step_number, instruction, requires_photo) VALUES
@@ -54,3 +59,12 @@ INSERT INTO checklist_steps (restaurant_id, checklist_id, step_number, instructi
 ('R001', 'DINING_OPEN', 24, 'Wait for opening time', false),
 ('R001', 'DINING_OPEN', 25, 'Unlock doors', false);
 ```
+
+---
+
+## Notes
+
+- **Reminder times are in UTC.** Adjust for your timezone (e.g. if you're UTC+8, a 10:00 AM local reminder = `02:00` here).
+- Set `opening_reminder_time` or `closing_reminder_time` to `NULL` to disable that reminder entirely.
+- `reminder_followup_minutes` controls how long after the first reminder the follow-up fires if no checklist has been started.
+- `branch` is optional — leave as `NULL` if you only have one location.

@@ -9,7 +9,7 @@ from starlette.responses import Response
 from app.bot.handlers import process_update
 from app.bot.notifier import close_client, register_bot_commands
 from app.core.database import close_db, get_engine
-from app.core.scheduler import scheduler
+from app.core.scheduler import schedule_restaurant_reminders, scheduler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ async def startup() -> None:
     logger.info("Starting Sigmo bot")
     scheduler.start()
     logger.info("Scheduler started")
+    await schedule_restaurant_reminders()
     await register_bot_commands()
 
 

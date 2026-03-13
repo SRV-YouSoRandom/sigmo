@@ -10,9 +10,25 @@ from app.models.session import Session
 
 
 async def get_active_session(db: AsyncSession, chat_id: str) -> Session | None:
-    """Return the active session for a given chat_id, or None."""
     result = await db.execute(
         select(Session).where(Session.chat_id == chat_id, Session.status == "active")
+    )
+    return result.scalars().first()
+
+
+async def get_paused_session(db: AsyncSession, chat_id: str) -> Session | None:
+    result = await db.execute(
+        select(Session).where(Session.chat_id == chat_id, Session.status == "paused")
+    )
+    return result.scalars().first()
+
+
+async def get_active_or_paused_session(db: AsyncSession, chat_id: str) -> Session | None:
+    result = await db.execute(
+        select(Session).where(
+            Session.chat_id == chat_id,
+            Session.status.in_(["active", "paused"]),
+        )
     )
     return result.scalars().first()
 
@@ -23,7 +39,6 @@ async def create_session(
     restaurant_id: str,
     checklist_id: str,
 ) -> Session:
-    """Create and return a new active session."""
     session = Session(
         chat_id=chat_id,
         restaurant_id=restaurant_id,
@@ -43,7 +58,6 @@ async def update_session_step(
     next_step: int,
     last_message_id: Optional[int] = None,
 ) -> None:
-    """Advance the session to the next step, optionally storing the new message_id."""
     vals: dict = {"current_step": next_step, "updated_at": datetime.utcnow()}
     if last_message_id is not None:
         vals["last_message_id"] = last_message_id
@@ -51,10 +65,7 @@ async def update_session_step(
     await db.commit()
 
 
-async def save_last_message_id(
-    db: AsyncSession, session: Session, message_id: int
-) -> None:
-    """Persist the last bot message_id for this session (used for deletion)."""
+async def save_last_message_id(db: AsyncSession, session: Session, message_id: int) -> None:
     await db.execute(
         update(Session)
         .where(Session.id == session.id)
@@ -63,8 +74,25 @@ async def save_last_message_id(
     await db.commit()
 
 
+async def pause_session(db: AsyncSession, session: Session) -> None:
+    await db.execute(
+        update(Session)
+        .where(Session.id == session.id)
+        .values(status="paused", updated_at=datetime.utcnow())
+    )
+    await db.commit()
+
+
+async def resume_session(db: AsyncSession, session: Session) -> None:
+    await db.execute(
+        update(Session)
+        .where(Session.id == session.id)
+        .values(status="active", updated_at=datetime.utcnow())
+    )
+    await db.commit()
+
+
 async def complete_session(db: AsyncSession, session: Session) -> None:
-    """Mark a session as completed."""
     await db.execute(
         update(Session)
         .where(Session.id == session.id)
@@ -74,7 +102,6 @@ async def complete_session(db: AsyncSession, session: Session) -> None:
 
 
 async def abandon_session(db: AsyncSession, session: Session) -> None:
-    """Mark a session as abandoned."""
     await db.execute(
         update(Session)
         .where(Session.id == session.id)

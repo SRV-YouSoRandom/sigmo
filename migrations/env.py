@@ -10,15 +10,14 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.core.config import get_settings
 from app.core.database import Base
 
-# Import all models so they register with Base.metadata
 from app.models.checklist_run import ChecklistRun  # noqa: F401
 from app.models.checklist_step import ChecklistStep  # noqa: F401
+from app.models.issue_report import IssueReport  # noqa: F401
 from app.models.manager import Manager  # noqa: F401
 from app.models.restaurant import Restaurant  # noqa: F401
 from app.models.session import Session  # noqa: F401
 from app.models.staff import Staff  # noqa: F401
 from app.models.step_photo import StepPhoto  # noqa: F401
-from app.models.issue_report import IssueReport  # noqa: F401
 
 config = context.config
 
@@ -26,7 +25,6 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
-
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 

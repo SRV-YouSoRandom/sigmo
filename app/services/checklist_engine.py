@@ -16,7 +16,10 @@ from app.services.session_service import (
     abandon_session,
     complete_session,
     create_session,
+    get_active_or_paused_session,
     get_active_session,
+    pause_session,
+    resume_session,
     update_session_step,
 )
 
@@ -26,6 +29,10 @@ CHECKLIST_LABELS: dict[str, str] = {
     "DINING_OPEN": "Dining Opening",
     "DINING_CLOSE": "Dining Closing",
 }
+
+# Which checklist types count as "opening" for reminder follow-up checks
+OPENING_CHECKLISTS = {"KITCHEN_OPEN", "DINING_OPEN"}
+CLOSING_CHECKLISTS = {"KITCHEN_CLOSE", "DINING_CLOSE"}
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +82,14 @@ async def _get_restaurant(db: AsyncSession, restaurant_id: str):
     return res.scalars().first()
 
 
+def _branch_label(restaurant) -> str:
+    """Return 'Name – Branch' if branch is set, else just 'Name'."""
+    if restaurant and restaurant.branch:
+        return f"{restaurant.name} – {restaurant.branch}"
+    return restaurant.name if restaurant else ""
+
+
 def _format_step_message(step: ChecklistStep, total_steps: int) -> str:
-    """Format step instruction text. Buttons are added by send_step_message in notifier."""
     photo_hint = "\n📷 <i>This step requires a photo.</i>" if step.requires_photo else ""
     return f"<b>Step {step.step_number} of {total_steps}</b>\n{step.instruction}{photo_hint}"
 
@@ -88,61 +101,47 @@ def _format_step_message(step: ChecklistStep, total_steps: int) -> str:
 async def start_checklist(db: AsyncSession, chat_id: str, text: str) -> dict:
     checklist_id = parse_command(text)
     if checklist_id is None:
-        return {"reply": None, "use_buttons": False, "manager_msg": None, "manager_chat_id": None, "session": None, "photo_to_manager": None}
+        return _empty_result()
 
     staff = await _get_staff(db, chat_id)
     if staff is None:
-        return {
-            "reply": "You are not registered in the system. Please contact your manager.",
-            "use_buttons": False,
-            "manager_msg": None,
-            "manager_chat_id": None,
-            "session": None,
-            "photo_to_manager": None,
-        }
+        return _reply("You are not registered in the system. Please contact your manager.")
 
-    existing = await get_active_session(db, chat_id)
+    # Block if already active OR paused
+    existing = await get_active_or_paused_session(db, chat_id)
     if existing:
         label = CHECKLIST_LABELS.get(existing.checklist_id, existing.checklist_id)
-        return {
-            "reply": (
-                f"You already have an active checklist: <b>{label}</b>.\n"
-                "Tap <b>✅ Done</b> to continue, or use /cancel to stop it."
-            ),
-            "use_buttons": False,
-            "manager_msg": None,
-            "manager_chat_id": None,
-            "session": existing,
-            "photo_to_manager": None,
-        }
+        if existing.status == "paused":
+            return _reply(
+                f"Your <b>{label}</b> checklist is paused due to a critical issue.\n"
+                "Your manager needs to resolve it before you can continue."
+            )
+        return _reply(
+            f"You already have an active checklist: <b>{label}</b>.\n"
+            "Tap <b>✅ Done</b> to continue, or use /cancel to stop it."
+        )
 
     total_steps = await _count_steps(db, staff.restaurant_id, checklist_id)
     if total_steps == 0:
-        return {
-            "reply": "No steps configured for this checklist. Please contact your manager.",
-            "use_buttons": False,
-            "manager_msg": None,
-            "manager_chat_id": None,
-            "session": None,
-            "photo_to_manager": None,
-        }
+        return _reply("No steps configured for this checklist. Please contact your manager.")
 
     session = await create_session(db, chat_id, staff.restaurant_id, checklist_id)
     step = await _get_step(db, staff.restaurant_id, checklist_id, 1)
+    restaurant = await _get_restaurant(db, staff.restaurant_id)
 
     label = CHECKLIST_LABELS.get(checklist_id, checklist_id)
     now = datetime.utcnow().strftime("%I:%M %p")
-
-    reply = f"Starting <b>{label}</b> checklist.\n\n{_format_step_message(step, total_steps)}"
-    restaurant = await _get_restaurant(db, staff.restaurant_id)
+    branch = _branch_label(restaurant)
 
     return {
-        "reply": reply,
+        "reply": f"Starting <b>{label}</b> checklist.\n\n{_format_step_message(step, total_steps)}",
         "use_buttons": True,
-        "manager_msg": f"🟢 <b>{staff.name}</b> started <b>{label}</b> at {now}",
+        "manager_msg": f"🟢 <b>{staff.name}</b> started <b>{label}</b> at {now}\n📍 {branch}",
         "manager_chat_id": restaurant.manager_chat_id if restaurant else None,
         "session": session,
         "photo_to_manager": None,
+        "completed": False,
+        "delete_message_id": None,
     }
 
 
@@ -151,85 +150,63 @@ async def progress_step(
 ) -> dict:
     session = await get_active_session(db, chat_id)
     if session is None:
-        return {
-            "reply": "No active checklist. Tap a button below to start one.",
-            "use_buttons": False,
-            "manager_msg": None,
-            "manager_chat_id": None,
-            "completed": False,
-            "delete_message_id": None,
-            "photo_to_manager": None,
-        }
+        # Could be paused
+        paused = await get_active_or_paused_session(db, chat_id)
+        if paused and paused.status == "paused":
+            label = CHECKLIST_LABELS.get(paused.checklist_id, paused.checklist_id)
+            return _reply(
+                f"Your <b>{label}</b> checklist is paused due to a critical issue.\n"
+                "Your manager needs to resolve it before you can continue."
+            )
+        return _reply("No active checklist. Tap a button below to start one.")
 
     current_step = await _get_step(
         db, session.restaurant_id, session.checklist_id, session.current_step
     )
     if current_step is None:
-        return {
-            "reply": "Step data is missing. Please contact your manager.",
-            "use_buttons": False,
-            "manager_msg": None,
-            "manager_chat_id": None,
-            "completed": False,
-            "delete_message_id": None,
-            "photo_to_manager": None,
-        }
+        return _reply("Step data is missing. Please contact your manager.")
 
     total_steps = await _count_steps(db, session.restaurant_id, session.checklist_id)
 
     if current_step.requires_photo and not is_photo:
         return {
-            "reply": "📷 This step requires a photo. Please send a photo to continue.",
-            "use_buttons": False,
-            "manager_msg": None,
-            "manager_chat_id": None,
-            "completed": False,
+            **_reply("📷 This step requires a photo. Please send a photo to continue."),
             "delete_message_id": None,
             "photo_to_manager": None,
+            "completed": False,
         }
 
-    # Store the message_id to delete before moving on
     delete_message_id = session.last_message_id
-
     manager_photo_msg = None
     photo_file_id_for_manager = None
 
     if is_photo and file_id:
-        photo = StepPhoto(
-            session_id=session.id,
-            step_number=session.current_step,
-            file_id=file_id,
-        )
-        db.add(photo)
+        db.add(StepPhoto(session_id=session.id, step_number=session.current_step, file_id=file_id))
         await db.commit()
-
         staff = await _get_staff(db, chat_id)
         label = CHECKLIST_LABELS.get(session.checklist_id, session.checklist_id)
         manager_photo_msg = (
-            f"📸 <b>{staff.name}</b> – {label} Step {session.current_step}"
-            if staff else None
+            f"📸 <b>{staff.name}</b> – {label} Step {session.current_step}" if staff else None
         )
         photo_file_id_for_manager = file_id
 
     next_step_num = session.current_step + 1
-
     if next_step_num > total_steps:
-        return await _complete_checklist(db, session, total_steps, delete_message_id, manager_photo_msg, photo_file_id_for_manager)
+        return await _complete_checklist(
+            db, session, total_steps, delete_message_id,
+            manager_photo_msg, photo_file_id_for_manager
+        )
 
     await update_session_step(db, session, next_step_num)
-    next_step = await _get_step(
-        db, session.restaurant_id, session.checklist_id, next_step_num
-    )
-
-    reply = _format_step_message(next_step, total_steps)
+    next_step = await _get_step(db, session.restaurant_id, session.checklist_id, next_step_num)
 
     manager_chat_id = None
-    if manager_photo_msg or photo_file_id_for_manager:
+    if photo_file_id_for_manager:
         restaurant = await _get_restaurant(db, session.restaurant_id)
         manager_chat_id = restaurant.manager_chat_id if restaurant else None
 
     return {
-        "reply": reply,
+        "reply": _format_step_message(next_step, total_steps),
         "use_buttons": True,
         "manager_msg": manager_photo_msg,
         "manager_chat_id": manager_chat_id,
@@ -239,21 +216,17 @@ async def progress_step(
             "file_id": photo_file_id_for_manager,
             "caption": manager_photo_msg,
         } if photo_file_id_for_manager else None,
+        "session": session,
     }
 
 
 async def _complete_checklist(
-    db: AsyncSession,
-    session: Session,
-    total_steps: int,
-    delete_message_id: int | None,
-    manager_photo_msg: str | None,
-    photo_file_id_for_manager: str | None,
+    db, session, total_steps, delete_message_id, manager_photo_msg, photo_file_id_for_manager
 ) -> dict:
     await complete_session(db, session)
 
     photo_count = await _count_photos(db, session.id)
-    run = ChecklistRun(
+    db.add(ChecklistRun(
         chat_id=session.chat_id,
         restaurant_id=session.restaurant_id,
         checklist_id=session.checklist_id,
@@ -261,27 +234,28 @@ async def _complete_checklist(
         end_time=datetime.utcnow(),
         status="completed",
         photo_count=photo_count,
-    )
-    db.add(run)
+    ))
     await db.commit()
 
     duration = datetime.utcnow() - session.started_at
     minutes = int(duration.total_seconds() // 60)
     label = CHECKLIST_LABELS.get(session.checklist_id, session.checklist_id)
-    reply = f"✅ <b>{label}</b> complete! Finished in {minutes} minutes."
 
     staff = await _get_staff(db, session.chat_id)
+    restaurant = await _get_restaurant(db, session.restaurant_id)
+    branch = _branch_label(restaurant)
     start_str = session.started_at.strftime("%I:%M %p")
     end_str = datetime.utcnow().strftime("%I:%M %p")
+
     manager_msg = (
         f"✅ <b>{staff.name}</b> completed <b>{label}</b>\n"
+        f"📍 {branch}\n"
         f"Start: {start_str} | Finish: {end_str} | Photos: {photo_count}"
         if staff else None
     )
 
-    restaurant = await _get_restaurant(db, session.restaurant_id)
     return {
-        "reply": reply,
+        "reply": f"✅ <b>{label}</b> complete! Finished in {minutes} minutes.",
         "use_buttons": False,
         "manager_msg": manager_msg,
         "manager_chat_id": restaurant.manager_chat_id if restaurant else None,
@@ -291,25 +265,20 @@ async def _complete_checklist(
             "file_id": photo_file_id_for_manager,
             "caption": manager_photo_msg,
         } if photo_file_id_for_manager else None,
+        "session": session,
     }
 
 
 async def handle_abandon(db: AsyncSession, chat_id: str) -> dict:
-    session = await get_active_session(db, chat_id)
+    session = await get_active_or_paused_session(db, chat_id)
     if session is None:
-        return {
-            "reply": "No active checklist to cancel.",
-            "use_buttons": False,
-            "manager_msg": None,
-            "manager_chat_id": None,
-            "delete_message_id": None,
-        }
+        return {**_reply("No active checklist to cancel."), "delete_message_id": None}
 
     delete_message_id = session.last_message_id
     await abandon_session(db, session)
 
     photo_count = await _count_photos(db, session.id)
-    run = ChecklistRun(
+    db.add(ChecklistRun(
         chat_id=session.chat_id,
         restaurant_id=session.restaurant_id,
         checklist_id=session.checklist_id,
@@ -317,8 +286,7 @@ async def handle_abandon(db: AsyncSession, chat_id: str) -> dict:
         end_time=datetime.utcnow(),
         status="abandoned",
         photo_count=photo_count,
-    )
-    db.add(run)
+    ))
     await db.commit()
 
     staff = await _get_staff(db, chat_id)
@@ -334,26 +302,27 @@ async def handle_abandon(db: AsyncSession, chat_id: str) -> dict:
         ),
         "manager_chat_id": restaurant.manager_chat_id if restaurant else None,
         "delete_message_id": delete_message_id,
+        "completed": False,
+        "photo_to_manager": None,
+        "session": None,
     }
 
 
 async def handle_issue_report(
-    db: AsyncSession, chat_id: str, description: str
+    db: AsyncSession, chat_id: str, description: str, issue_type: str = "operational"
 ) -> dict:
-    """Log a critical issue for the current step and notify the manager."""
+    """
+    Log an issue for the current step.
+    - operational: auto-advances to next step
+    - critical: pauses the checklist, manager must resume
+    """
     session = await get_active_session(db, chat_id)
     if session is None:
-        return {
-            "reply": "No active checklist. Start a checklist first.",
-            "use_buttons": False,
-            "manager_msg": None,
-            "manager_chat_id": None,
-            "delete_message_id": None,
-            "photo_to_manager": None,
-        }
+        return {**_reply("No active checklist. Start a checklist first."), "delete_message_id": None, "photo_to_manager": None}
 
     staff = await _get_staff(db, chat_id)
     label = CHECKLIST_LABELS.get(session.checklist_id, session.checklist_id)
+    staff_name = staff.name if staff else chat_id
 
     issue = IssueReport(
         session_id=session.id,
@@ -361,34 +330,121 @@ async def handle_issue_report(
         restaurant_id=session.restaurant_id,
         checklist_id=session.checklist_id,
         step_number=session.current_step,
+        issue_type=issue_type,
         description=description,
     )
     db.add(issue)
     await db.commit()
     await db.refresh(issue)
 
-    staff_name = staff.name if staff else chat_id
+    restaurant = await _get_restaurant(db, session.restaurant_id)
+    branch = _branch_label(restaurant)
+    manager_chat_id = restaurant.manager_chat_id if restaurant else None
+
+    if issue_type == "critical":
+        await pause_session(db, session)
+
+        manager_msg = (
+            f"🔴 <b>CRITICAL Issue #{issue.id}</b>\n"
+            f"Staff: {staff_name}\n"
+            f"📍 {branch}\n"
+            f"Checklist: {label} – Step {session.current_step}\n\n"
+            f"📝 {description}\n\n"
+            f"<b>Checklist is PAUSED.</b> Tap 'Resume' in Open Issues to unblock staff."
+        )
+        return {
+            "reply": (
+                "🔴 <b>Critical issue reported.</b>\n"
+                "Your checklist has been <b>paused</b>.\n"
+                "Your manager has been notified and must resume it before you can continue."
+            ),
+            "use_buttons": False,
+            "manager_msg": manager_msg,
+            "manager_chat_id": manager_chat_id,
+            "delete_message_id": session.last_message_id,
+            "photo_to_manager": None,
+            "completed": False,
+            "session": session,
+            "issue_id": issue.id,
+        }
+
+    # Operational: auto-advance to next step
+    total_steps = await _count_steps(db, session.restaurant_id, session.checklist_id)
+    next_step_num = session.current_step + 1
+
     manager_msg = (
-        f"⚠️ <b>Issue #{issue.id} Reported</b>\n"
+        f"🟡 <b>Operational Issue #{issue.id}</b>\n"
         f"Staff: {staff_name}\n"
+        f"📍 {branch}\n"
         f"Checklist: {label} – Step {session.current_step}\n\n"
-        f"📝 {description}\n\n"
-        f"<i>Reply in the bot to mark it resolved.</i>"
+        f"📝 {description}"
     )
 
-    restaurant = await _get_restaurant(db, session.restaurant_id)
+    # Last step — complete the checklist
+    if next_step_num > total_steps:
+        return await _complete_checklist(db, session, total_steps, session.last_message_id, None, None)
+
+    await update_session_step(db, session, next_step_num)
+    next_step = await _get_step(db, session.restaurant_id, session.checklist_id, next_step_num)
+
+    return {
+        "reply": (
+            f"🟡 Operational issue logged. Moving to next step.\n\n"
+            f"{_format_step_message(next_step, total_steps)}"
+        ),
+        "use_buttons": True,
+        "manager_msg": manager_msg,
+        "manager_chat_id": manager_chat_id,
+        "delete_message_id": session.last_message_id,
+        "photo_to_manager": None,
+        "completed": False,
+        "session": session,
+        "issue_id": issue.id,
+    }
+
+
+async def resume_checklist_for_staff(db: AsyncSession, chat_id: str) -> dict:
+    """Called by manager service after resolving a critical issue — resumes the session."""
+    from app.services.session_service import get_paused_session
+    session = await get_paused_session(db, chat_id)
+    if session is None:
+        return _reply("No paused checklist found for this staff member.")
+
+    await resume_session(db, session)
 
     total_steps = await _count_steps(db, session.restaurant_id, session.checklist_id)
-    current_step = await _get_step(
-        db, session.restaurant_id, session.checklist_id, session.current_step
-    )
+    current_step = await _get_step(db, session.restaurant_id, session.checklist_id, session.current_step)
+
+    label = CHECKLIST_LABELS.get(session.checklist_id, session.checklist_id)
     step_msg = _format_step_message(current_step, total_steps) if current_step else ""
 
     return {
-        "reply": f"⚠️ Issue reported. Continue with the checklist.\n\n{step_msg}",
+        "staff_chat_id": session.chat_id,
+        "reply": (
+            f"▶️ <b>Checklist Resumed</b>\n"
+            f"Your manager has resolved the issue. Continue with <b>{label}</b>.\n\n"
+            f"{step_msg}"
+        ),
         "use_buttons": True,
-        "manager_msg": manager_msg,
-        "manager_chat_id": restaurant.manager_chat_id if restaurant else None,
-        "delete_message_id": session.last_message_id,
-        "photo_to_manager": None,
+        "session": session,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+def _empty_result() -> dict:
+    return {
+        "reply": None, "use_buttons": False, "manager_msg": None,
+        "manager_chat_id": None, "session": None, "photo_to_manager": None,
+        "completed": False, "delete_message_id": None,
+    }
+
+
+def _reply(text: str) -> dict:
+    return {
+        "reply": text, "use_buttons": False, "manager_msg": None,
+        "manager_chat_id": None, "session": None, "photo_to_manager": None,
+        "completed": False, "delete_message_id": None,
     }

@@ -13,10 +13,6 @@ from app.models.session import Session  # noqa: F401
 from app.models.staff import Staff
 from app.models.step_photo import StepPhoto  # noqa: F401
 
-# ---------------------------------------------------------------------------
-# In-memory SQLite engine for tests
-# ---------------------------------------------------------------------------
-
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 engine = create_async_engine(TEST_DB_URL, echo=False)
 TestSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -24,24 +20,25 @@ TestSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_com
 
 @pytest.fixture
 async def db():
-    """Yield a fresh database session with tables created."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
     async with TestSessionLocal() as session:
         yield session
-
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest.fixture
 async def seeded_db(db: AsyncSession):
-    """DB session pre-loaded with a restaurant, staff member, manager, and checklist steps."""
+    """DB with restaurant (with branch + reminders), staff, manager, and checklist steps."""
     restaurant = Restaurant(
         restaurant_id="R001",
         name="Test Restaurant",
+        branch="Makati",
         manager_chat_id="999",
+        opening_reminder_time="10:00",
+        closing_reminder_time="22:00",
+        reminder_followup_minutes=20,
     )
     db.add(restaurant)
 
@@ -76,5 +73,4 @@ async def seeded_db(db: AsyncSession):
     ]
     db.add_all(steps)
     await db.commit()
-
     yield db

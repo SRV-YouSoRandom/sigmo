@@ -22,7 +22,11 @@ async def startup() -> None:
     logger.info("Starting Sigmo bot")
     scheduler.start()
     logger.info("Scheduler started")
-    await schedule_restaurant_reminders()
+    # schedule_restaurant_reminders queries the DB — only call it if tables exist
+    try:
+        await schedule_restaurant_reminders()
+    except Exception as exc:
+        logger.warning("Skipping reminder scheduling at startup (tables may not exist yet): %s", exc)
     await register_bot_commands()
 
 

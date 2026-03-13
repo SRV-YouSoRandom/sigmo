@@ -6,7 +6,7 @@
 graph TD
     subgraph Server["Ubuntu VPS"]
         NX[Nginx :80/:443] --> FA[FastAPI :8000]
-        FA --> PB[PgBouncer :6432]
+        FA --> PB[PgBouncer :5432]
         PB --> PG[(PostgreSQL :5432)]
         FA -->|Cron 08:00| SCH[APScheduler]
         PROM[Prometheus :9090] --> FA
@@ -20,7 +20,7 @@ graph TD
 ## Prerequisites
 
 - Ubuntu 22.04+ VPS with a public IP
-- Domain name pointed to the server (A record)
+- Domain name with an A record pointing to your VPS IP (e.g. `tg.yourdomain.com`)
 - Docker Engine 24+ and Docker Compose v2
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 
@@ -29,116 +29,178 @@ graph TD
 ## 1. Server Setup
 
 ```bash
-# Update system
 sudo apt update && sudo apt upgrade -y
-
-# Install Docker
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER
-
-# Install Docker Compose plugin (if not included)
 sudo apt install docker-compose-plugin -y
-
-# Verify
 docker compose version
 ```
 
+---
+
 ## 2. SSL Certificate
 
+Stop Nginx before running certbot so port 80 is free:
+
 ```bash
+docker compose -f docker-compose.prod.yml stop nginx
 sudo apt install certbot -y
-sudo certbot certonly --standalone -d yourdomain.com
-
-# Certificates are stored at:
-#   /etc/letsencrypt/live/yourdomain.com/fullchain.pem
-#   /etc/letsencrypt/live/yourdomain.com/privkey.pem
-
-# Auto-renew
-sudo certbot renew --dry-run
+sudo certbot certonly --standalone -d tg.yourdomain.com
 ```
+
+Certificates are stored at:
+
+- `/etc/letsencrypt/live/tg.yourdomain.com/fullchain.pem`
+- `/etc/letsencrypt/live/tg.yourdomain.com/privkey.pem`
+
+Update nginx.conf with your actual domain:
+
+```bash
+sed -i 's/yourdomain.com/tg.yourdomain.com/g' docker/nginx.conf
+```
+
+---
 
 ## 3. Clone & Configure
 
 ```bash
-git clone <your-repo-url> /opt/sigmo
-cd /opt/sigmo
-
+git clone https://github.com/SRV-YouSoRandom/sigmo.git
+cd sigmo
 cp .env.example .env
 nano .env
 ```
 
-Fill in the required values:
+Fill in required values:
 
 ```env
 TELEGRAM_BOT_TOKEN=<token from BotFather>
+POSTGRES_HOST=pgbouncer
+POSTGRES_PORT=5432
+POSTGRES_DB=sigmo
+POSTGRES_USER=sigmo
 POSTGRES_PASSWORD=<strong random password>
+SECRET_WEBHOOK_PATH=/webhook
+ENVIRONMENT=production
+LOG_LEVEL=INFO
 ```
 
-## 4. Update Nginx Domain
+> Note: PgBouncer listens on port 5432 in this setup, not 6432.
 
-Edit `docker/nginx.conf` and replace `yourdomain.com` with your actual domain on all three occurrences.
+---
+
+## 4. PgBouncer Auth Fix
+
+The `edoburu/pgbouncer` image must use `scram-sha-256` to match asyncpg. Make sure your `docker-compose.prod.yml` pgbouncer service includes:
+
+```yaml
+pgbouncer:
+  image: edoburu/pgbouncer
+  environment:
+    DB_HOST: postgres
+    DB_NAME: sigmo
+    DB_USER: sigmo
+    DB_PASSWORD: ${POSTGRES_PASSWORD}
+    AUTH_TYPE: scram-sha-256
+  depends_on:
+    - postgres
+  restart: always
+```
+
+---
 
 ## 5. Deploy
 
-```mermaid
-graph LR
-    A[docker compose build] --> B[docker compose up -d]
-    B --> C[alembic upgrade head]
-    C --> D[Register webhook]
-    D --> E[Verify /health]
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
+---
+
+## 6. Run Migrations
+
+Alembic must connect directly to Postgres, not PgBouncer:
+
 ```bash
-# Build and start all services
-docker compose -f docker-compose.prod.yml up -d --build
+# Generate migration files
+docker compose -f docker-compose.prod.yml exec fastapi sh -c \
+  "POSTGRES_HOST=postgres POSTGRES_PORT=5432 alembic revision --autogenerate -m 'initial'"
 
-# Run database migrations
-docker compose exec fastapi alembic upgrade head
+# Apply migrations
+docker compose -f docker-compose.prod.yml exec fastapi sh -c \
+  "POSTGRES_HOST=postgres POSTGRES_PORT=5432 alembic upgrade head"
 
-# Register Telegram webhook
-curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
-     -d "url=https://yourdomain.com/webhook"
+# Verify tables
+docker compose -f docker-compose.prod.yml exec postgres psql -U sigmo -d sigmo -c "\dt"
+```
 
-# Verify
-curl https://yourdomain.com/health
+---
+
+## 7. Register Telegram Webhook
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+     -d "url=https://tg.yourdomain.com/webhook"
+# Expected: {"ok":true,"result":true,"description":"Webhook was set"}
+```
+
+---
+
+## 8. Verify Health
+
+```bash
+curl https://tg.yourdomain.com/health
 # Expected: {"status":"ok","database":true}
 ```
 
-## 6. Seed Data
+---
 
-Connect to PostgreSQL and insert your restaurant, staff, and checklist steps:
+## 9. Seed Data
+
+Connect to Postgres:
 
 ```bash
-docker compose exec postgres psql -U sigmo -d sigmo
+docker compose -f docker-compose.prod.yml exec postgres psql -U sigmo -d sigmo
 ```
 
+> To find a Telegram chat_id, have the user message [@userinfobot](https://t.me/userinfobot) on Telegram.
+
 ```sql
--- Add a restaurant
+-- Add restaurant
 INSERT INTO restaurants (restaurant_id, name, manager_chat_id)
 VALUES ('R001', 'My Restaurant', '<manager_telegram_chat_id>');
 
--- Add staff
+-- Add staff (repeat for each staff member)
 INSERT INTO staff (chat_id, name, restaurant_id)
-VALUES ('<staff_telegram_chat_id>', 'John', 'R001');
+VALUES ('<staff_telegram_chat_id>', 'Staff Name', 'R001');
 
--- Add checklist steps
+-- Sample checklist steps (first 5 of Dining Opening)
+-- Step 9 and 11 require a photo as an example
 INSERT INTO checklist_steps (restaurant_id, checklist_id, step_number, instruction, requires_photo) VALUES
-('R001', 'KITCHEN_OPEN', 1, 'Turn on all lights', false),
-('R001', 'KITCHEN_OPEN', 2, 'Clean prep tables and take a photo', true),
-('R001', 'KITCHEN_OPEN', 3, 'Turn on ovens and fryers', false),
-('R001', 'KITCHEN_OPEN', 4, 'Check fridge temperatures', false),
-('R001', 'KITCHEN_OPEN', 5, 'Set up workstations', false);
+('R001', 'DINING_OPEN', 1, 'Turn on lights', false),
+('R001', 'DINING_OPEN', 2, 'Turn on AC', false),
+('R001', 'DINING_OPEN', 3, 'Turn on sounds', false),
+('R001', 'DINING_OPEN', 4, 'Turn on POS and let it boot', false),
+('R001', 'DINING_OPEN', 5, 'Read endorsements if any', false);
+-- ... add remaining steps as needed
 ```
 
-> **Tip:** To find a user's Telegram `chat_id`, have them message [@userinfobot](https://t.me/userinfobot).
+---
 
-## 7. Operations
+## 10. Bring Nginx Back Up
+
+```bash
+docker compose -f docker-compose.prod.yml up -d nginx
+```
+
+---
+
+## 11. Operations
 
 ### View Logs
 
 ```bash
-docker compose logs -f fastapi     # App logs
-docker compose logs -f postgres    # DB logs
+docker compose -f docker-compose.prod.yml logs -f fastapi
+docker compose -f docker-compose.prod.yml logs -f postgres
 ```
 
 ### Restart Services
@@ -153,42 +215,48 @@ docker compose -f docker-compose.prod.yml restart
 cd /opt/sigmo
 git pull
 docker compose -f docker-compose.prod.yml up -d --build
-docker compose exec fastapi alembic upgrade head
+docker compose -f docker-compose.prod.yml exec fastapi sh -c \
+  "POSTGRES_HOST=postgres POSTGRES_PORT=5432 alembic upgrade head"
 ```
 
 ### Monitoring
 
-| Service    | URL                             | Purpose         |
-| ---------- | ------------------------------- | --------------- |
-| Health     | `https://yourdomain.com/health` | App + DB status |
-| Prometheus | `http://server-ip:9090`         | Raw metrics     |
-| Grafana    | `http://server-ip:3000`         | Dashboards      |
+| Service    | URL                                | Access     |
+| ---------- | ---------------------------------- | ---------- |
+| Health     | `https://tg.yourdomain.com/health` | Public     |
+| Prometheus | `http://server-ip:9090`            | SSH tunnel |
+| Grafana    | `http://server-ip:3000`            | SSH tunnel |
 
-### Key Metrics
-
-| Metric                             | Type      | Description                                |
-| ---------------------------------- | --------- | ------------------------------------------ |
-| `sigmo_checklist_started_total`    | Counter   | Checklists started by restaurant/checklist |
-| `sigmo_checklist_completed_total`  | Counter   | Checklists completed                       |
-| `sigmo_checklist_abandoned_total`  | Counter   | Checklists abandoned                       |
-| `sigmo_checklist_duration_seconds` | Histogram | Time to complete checklists                |
-| `sigmo_webhook_processing_seconds` | Histogram | Webhook processing latency                 |
-
-## 8. Backup
+To access Grafana or Prometheus locally via SSH tunnel:
 
 ```bash
-# Database backup
-docker compose exec postgres pg_dump -U sigmo sigmo > backup_$(date +%F).sql
-
-# Restore
-cat backup_2026-03-10.sql | docker compose exec -T postgres psql -U sigmo sigmo
+ssh -L 3000:localhost:3000 user@your-vps-ip
+# Then open http://localhost:3000 in your browser
 ```
 
-## 9. Troubleshooting
+---
 
-| Symptom                             | Check                                                                  |
-| ----------------------------------- | ---------------------------------------------------------------------- |
-| Bot not responding                  | `docker compose logs fastapi` – verify bot token                       |
-| `/health` returns `database: false` | `docker compose logs postgres` – check PgBouncer → Postgres connection |
-| No daily summary                    | Verify `manager_chat_id` is correct; check scheduler logs              |
-| Webhook 504                         | Nginx timeout – check FastAPI is running on port 8000                  |
+## 12. Backup
+
+```bash
+docker compose -f docker-compose.prod.yml exec postgres pg_dump -U sigmo sigmo > backup_$(date +%F).sql
+```
+
+Restore:
+
+```bash
+cat backup_2026-03-13.sql | docker compose -f docker-compose.prod.yml exec -T postgres psql -U sigmo sigmo
+```
+
+---
+
+## 13. Troubleshooting
+
+| Symptom                     | Check                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| Bot not responding          | `docker compose logs fastapi` – verify bot token and webhook                   |
+| `database: false` in health | Check PgBouncer AUTH_TYPE is `scram-sha-256`, verify POSTGRES_PASSWORD matches |
+| Alembic connection refused  | Run with `POSTGRES_HOST=postgres POSTGRES_PORT=5432` to bypass PgBouncer       |
+| Nginx restarting            | SSL certs missing – run certbot before starting Nginx                          |
+| Webhook 404                 | Make sure full token is included: `bot<id>:<hash>`                             |
+| No daily summary            | Verify `manager_chat_id` is correct in restaurants table                       |

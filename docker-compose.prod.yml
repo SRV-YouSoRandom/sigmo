@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   fastapi:
     build:
@@ -28,6 +26,7 @@ services:
       DB_NAME: sigmo
       DB_USER: sigmo
       DB_PASSWORD: ${POSTGRES_PASSWORD}
+      AUTH_TYPE: scram-sha-256
     depends_on:
       - postgres
     restart: always

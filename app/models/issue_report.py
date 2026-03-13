@@ -1,8 +1,9 @@
 """IssueReport ORM model – stores critical issues reported during a checklist step."""
 
 from datetime import datetime
+from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -27,3 +28,6 @@ class IssueReport(Base):
     reported_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), default=datetime.utcnow
     )
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolved_by_chat_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

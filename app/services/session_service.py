@@ -1,6 +1,7 @@
 """Session CRUD operations."""
 
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,12 +37,28 @@ async def create_session(
     return session
 
 
-async def update_session_step(db: AsyncSession, session: Session, next_step: int) -> None:
-    """Advance the session to the next step."""
+async def update_session_step(
+    db: AsyncSession,
+    session: Session,
+    next_step: int,
+    last_message_id: Optional[int] = None,
+) -> None:
+    """Advance the session to the next step, optionally storing the new message_id."""
+    vals: dict = {"current_step": next_step, "updated_at": datetime.utcnow()}
+    if last_message_id is not None:
+        vals["last_message_id"] = last_message_id
+    await db.execute(update(Session).where(Session.id == session.id).values(**vals))
+    await db.commit()
+
+
+async def save_last_message_id(
+    db: AsyncSession, session: Session, message_id: int
+) -> None:
+    """Persist the last bot message_id for this session (used for deletion)."""
     await db.execute(
         update(Session)
         .where(Session.id == session.id)
-        .values(current_step=next_step, updated_at=datetime.utcnow())
+        .values(last_message_id=message_id, updated_at=datetime.utcnow())
     )
     await db.commit()
 

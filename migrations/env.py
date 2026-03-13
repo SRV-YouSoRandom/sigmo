@@ -13,6 +13,7 @@ from app.core.database import Base
 # Import all models so they register with Base.metadata
 from app.models.checklist_run import ChecklistRun  # noqa: F401
 from app.models.checklist_step import ChecklistStep  # noqa: F401
+from app.models.manager import Manager  # noqa: F401
 from app.models.restaurant import Restaurant  # noqa: F401
 from app.models.session import Session  # noqa: F401
 from app.models.staff import Staff  # noqa: F401

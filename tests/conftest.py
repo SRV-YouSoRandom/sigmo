@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.database import Base
 from app.models.checklist_run import ChecklistRun  # noqa: F401
 from app.models.checklist_step import ChecklistStep
+from app.models.issue_report import IssueReport  # noqa: F401
+from app.models.manager import Manager
 from app.models.restaurant import Restaurant
 from app.models.session import Session  # noqa: F401
 from app.models.staff import Staff
@@ -35,7 +37,7 @@ async def db():
 
 @pytest.fixture
 async def seeded_db(db: AsyncSession):
-    """DB session pre-loaded with a restaurant, staff member, and checklist steps."""
+    """DB session pre-loaded with a restaurant, staff member, manager, and checklist steps."""
     restaurant = Restaurant(
         restaurant_id="R001",
         name="Test Restaurant",
@@ -45,6 +47,9 @@ async def seeded_db(db: AsyncSession):
 
     staff = Staff(chat_id="123456", name="John", restaurant_id="R001")
     db.add(staff)
+
+    manager = Manager(chat_id="999", name="Manager Bob", restaurant_id="R001")
+    db.add(manager)
 
     steps = [
         ChecklistStep(

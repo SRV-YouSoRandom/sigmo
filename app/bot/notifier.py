@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 _client: httpx.AsyncClient | None = None
 
-# Reply keyboard shown after /start and after checklist completion
+# Reply keyboard for staff – shown after /start and after checklist completion
 CHECKLIST_KEYBOARD = {
     "keyboard": [
         [
@@ -25,6 +25,19 @@ CHECKLIST_KEYBOARD = {
     "resize_keyboard": True,
     "persistent": True,
     "input_field_placeholder": "Tap a checklist to begin...",
+}
+
+# Reply keyboard for managers
+MANAGER_KEYBOARD = {
+    "keyboard": [
+        [
+            {"text": "👥 Staff Status"},
+            {"text": "⚠️ Open Issues"},
+        ],
+    ],
+    "resize_keyboard": True,
+    "persistent": True,
+    "input_field_placeholder": "Select an option...",
 }
 
 REMOVE_KEYBOARD = {"remove_keyboard": True}
@@ -48,8 +61,8 @@ async def send_telegram_message(
     chat_id: str,
     text: str,
     reply_markup: dict | None = None,
-) -> bool:
-    """Send a plain text message to a Telegram chat."""
+) -> int | None:
+    """Send a plain text message. Returns the Telegram message_id on success, else None."""
     client = await get_client()
     settings = get_settings()
     url = f"{settings.telegram_api_url}/sendMessage"
@@ -59,14 +72,16 @@ async def send_telegram_message(
     try:
         response = await client.post(url, json=payload)
         response.raise_for_status()
-        return True
+        data = response.json()
+        return data.get("result", {}).get("message_id")
     except httpx.HTTPError as exc:
         logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
-        return False
+        return None
 
 
-async def send_step_message(chat_id: str, text: str) -> bool:
-    """Send a step instruction with Done and Report Issue inline buttons."""
+async def send_step_message(chat_id: str, text: str) -> int | None:
+    """Send a step instruction with Done and Report Issue inline buttons.
+    Returns message_id on success, else None."""
     client = await get_client()
     settings = get_settings()
     url = f"{settings.telegram_api_url}/sendMessage"
@@ -86,9 +101,67 @@ async def send_step_message(chat_id: str, text: str) -> bool:
     try:
         response = await client.post(url, json=payload)
         response.raise_for_status()
-        return True
+        data = response.json()
+        return data.get("result", {}).get("message_id")
     except httpx.HTTPError as exc:
         logger.error("Failed to send step message to %s: %s", chat_id, exc)
+        return None
+
+
+async def delete_message(chat_id: str, message_id: int) -> bool:
+    """Delete a specific message in a chat."""
+    client = await get_client()
+    settings = get_settings()
+    url = f"{settings.telegram_api_url}/deleteMessage"
+    payload = {"chat_id": chat_id, "message_id": message_id}
+    try:
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        return True
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to delete message %s in chat %s: %s", message_id, chat_id, exc)
+        return False
+
+
+async def send_photo_to_manager(
+    manager_chat_id: str,
+    file_id: str,
+    caption: str,
+) -> bool:
+    """Forward a staff photo to the manager with a caption."""
+    client = await get_client()
+    settings = get_settings()
+    url = f"{settings.telegram_api_url}/sendPhoto"
+    payload = {
+        "chat_id": manager_chat_id,
+        "photo": file_id,
+        "caption": caption,
+        "parse_mode": "HTML",
+    }
+    try:
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        return True
+    except httpx.HTTPError as exc:
+        logger.error("Failed to send photo to manager %s: %s", manager_chat_id, exc)
+        return False
+
+
+async def edit_message_reply_markup(
+    chat_id: str, message_id: int, reply_markup: dict | None = None
+) -> bool:
+    """Edit (or remove) inline keyboard on an existing message."""
+    client = await get_client()
+    settings = get_settings()
+    url = f"{settings.telegram_api_url}/editMessageReplyMarkup"
+    payload: dict = {"chat_id": chat_id, "message_id": message_id}
+    payload["reply_markup"] = reply_markup or {}
+    try:
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        return True
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to edit reply markup for msg %s: %s", message_id, exc)
         return False
 
 
@@ -106,7 +179,7 @@ async def answer_callback_query(callback_query_id: str, text: str = "") -> None:
 
 
 async def notify_manager(manager_chat_id: str | None, message: str | None) -> None:
-    """Send a notification to the manager."""
+    """Send a text notification to the manager."""
     if manager_chat_id and message:
         await send_telegram_message(manager_chat_id, message)
 

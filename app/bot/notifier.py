@@ -10,6 +10,25 @@ logger = logging.getLogger(__name__)
 
 _client: httpx.AsyncClient | None = None
 
+# Reply keyboard shown after /start and after checklist completion
+CHECKLIST_KEYBOARD = {
+    "keyboard": [
+        [
+            {"text": "🍳 Kitchen Opening"},
+            {"text": "🔒 Kitchen Closing"},
+        ],
+        [
+            {"text": "🍽️ Dining Opening"},
+            {"text": "🔒 Dining Closing"},
+        ],
+    ],
+    "resize_keyboard": True,
+    "persistent": True,
+    "input_field_placeholder": "Tap a checklist to begin...",
+}
+
+REMOVE_KEYBOARD = {"remove_keyboard": True}
+
 
 async def get_client() -> httpx.AsyncClient:
     global _client
@@ -25,12 +44,18 @@ async def close_client() -> None:
         _client = None
 
 
-async def send_telegram_message(chat_id: str, text: str) -> bool:
+async def send_telegram_message(
+    chat_id: str,
+    text: str,
+    reply_markup: dict | None = None,
+) -> bool:
     """Send a plain text message to a Telegram chat."""
     client = await get_client()
     settings = get_settings()
     url = f"{settings.telegram_api_url}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
+    payload: dict = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     try:
         response = await client.post(url, json=payload)
         response.raise_for_status()
@@ -48,6 +73,7 @@ async def send_step_message(chat_id: str, text: str) -> bool:
     payload = {
         "chat_id": chat_id,
         "text": text,
+        "parse_mode": "HTML",
         "reply_markup": {
             "inline_keyboard": [
                 [
@@ -80,6 +106,20 @@ async def answer_callback_query(callback_query_id: str, text: str = "") -> None:
 
 
 async def notify_manager(manager_chat_id: str | None, message: str | None) -> None:
-    """Send a notification to the manager if both chat_id and message are provided."""
+    """Send a notification to the manager."""
     if manager_chat_id and message:
         await send_telegram_message(manager_chat_id, message)
+
+
+async def register_bot_commands() -> None:
+    """Register slash commands with Telegram so they appear in the menu."""
+    from app.bot.commands import BOT_COMMANDS
+    client = await get_client()
+    settings = get_settings()
+    url = f"{settings.telegram_api_url}/setMyCommands"
+    try:
+        response = await client.post(url, json={"commands": BOT_COMMANDS})
+        response.raise_for_status()
+        logger.info("Bot commands registered successfully")
+    except httpx.HTTPError as exc:
+        logger.error("Failed to register bot commands: %s", exc)

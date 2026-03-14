@@ -36,8 +36,6 @@ from app.services.session_service import save_last_message_id, get_active_sessio
 
 logger = logging.getLogger(__name__)
 
-# chat_id → issue type selection pending ("critical" | "operational")
-_awaiting_issue_type: dict[str, bool] = {}
 # chat_id → waiting for description text after type was chosen
 _awaiting_issue_description: dict[str, str] = {}  # value = issue_type
 
@@ -74,6 +72,13 @@ HELP_MESSAGE = (
     "<b>Need help?</b> Contact your manager."
 )
 
+MANAGER_HELP_MESSAGE = (
+    "📋 <b>Sigmo – Manager Commands</b>\n\n"
+    "• <b>👥 Staff Status</b> – see who is active, paused, or done today\n"
+    "• <b>⚠️ Open Issues</b> – view and resolve reported issues\n\n"
+    "Critical issues will pause a staff member's checklist until you resolve them here."
+)
+
 
 async def process_update(data: dict) -> None:
     with webhook_latency.time():
@@ -90,15 +95,19 @@ async def process_update(data: dict) -> None:
         text = (message.get("text") or "").strip()
         photo_list = message.get("photo")
 
-        if text in KEYBOARD_COMMAND_MAP:
-            text = KEYBOARD_COMMAND_MAP[text]
-
         factory = get_async_session()
         async with factory() as db:
+            # Check manager BEFORE normalizing keyboard buttons
+            # so a manager who accidentally taps a checklist button
+            # still gets the manager response, not a checklist flow.
             manager = await get_manager_by_chat_id(db, chat_id)
             if manager:
                 await _handle_manager_message(db, chat_id, text, manager)
                 return
+
+            # Only normalize keyboard buttons for staff
+            if text in KEYBOARD_COMMAND_MAP:
+                text = KEYBOARD_COMMAND_MAP[text]
 
             # Staff: waiting for issue description
             if chat_id in _awaiting_issue_description:
@@ -129,8 +138,12 @@ async def process_update(data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 async def _handle_manager_message(db: AsyncSession, chat_id: str, text: str, manager) -> None:
-    if text.lower() in ("/start", "/help"):
+    if text.lower() in ("/start",):
         await send_telegram_message(chat_id, MANAGER_WELCOME_MESSAGE, reply_markup=MANAGER_KEYBOARD)
+        return
+
+    if text.lower() in ("/help",):
+        await send_telegram_message(chat_id, MANAGER_HELP_MESSAGE, reply_markup=MANAGER_KEYBOARD)
         return
 
     if text in ("👥 Staff Status", "/status"):
@@ -148,8 +161,11 @@ async def _handle_manager_message(db: AsyncSession, chat_id: str, text: str, man
             await send_telegram_message(chat_id, m["text"], reply_markup=m["reply_markup"])
         return
 
+    # Catch-all — always show manager keyboard, never checklist keyboard
     await send_telegram_message(
-        chat_id, "Use the buttons below to manage your team.", reply_markup=MANAGER_KEYBOARD
+        chat_id,
+        "Use the buttons below to manage your team.",
+        reply_markup=MANAGER_KEYBOARD,
     )
 
 
@@ -195,7 +211,6 @@ async def _handle_callback_query(callback_query: dict) -> None:
                     f"✅ <b>Issue #{issue.id} resolved.</b> Staff checklist has been resumed.",
                     reply_markup=MANAGER_KEYBOARD,
                 )
-                # Resume the staff session and notify them
                 resume_result = await resume_checklist_for_staff(db, staff_chat_id)
                 if resume_result.get("reply"):
                     msg_id = await send_step_message(staff_chat_id, resume_result["reply"]) \

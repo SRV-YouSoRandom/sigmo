@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 
-COMPOSE="docker compose -f docker-compose.prod.yml"
+export TZ=Asia/Manila
 
-run_sql () {
-    $COMPOSE exec -T postgres psql -U sigmo -d sigmo -c "$1"
-}
+COMPOSE="docker compose -f docker-compose.prod.yml"
 
 color_green="\033[32m"
 color_red="\033[31m"
 color_yellow="\033[33m"
 color_reset="\033[0m"
+
+run_sql () {
+    $COMPOSE exec -T postgres psql -U sigmo -d sigmo -c "$1"
+}
 
 pause () {
     read -r -p "Press ENTER to continue..."
@@ -35,17 +37,64 @@ input_required () {
     done
 }
 
+select_restaurant () {
+
+    echo
+    echo "Available Restaurants:"
+    $COMPOSE exec -T postgres psql -U sigmo -d sigmo -At -c \
+    "SELECT restaurant_id || ' | ' || name FROM restaurants;" \
+    | nl
+
+    echo
+    read -r -p "Select restaurant number: " choice
+
+    restaurant=$(
+        $COMPOSE exec -T postgres psql -U sigmo -d sigmo -At -c \
+        "SELECT restaurant_id FROM restaurants;" | sed -n "${choice}p"
+    )
+
+    if [[ -z "$restaurant" ]]; then
+        echo "Invalid selection"
+        pause
+        return 1
+    fi
+
+    echo "$restaurant"
+}
+
+select_checklist () {
+
+    echo
+    echo "Select Checklist:"
+    echo "1) Kitchen Opening"
+    echo "2) Kitchen Closing"
+    echo "3) Dining Opening"
+    echo "4) Dining Closing"
+
+    read -r -p "Select option: " choice
+
+    case "$choice" in
+        1) echo "KITCHEN_OPEN" ;;
+        2) echo "KITCHEN_CLOSE" ;;
+        3) echo "DINING_OPEN" ;;
+        4) echo "DINING_CLOSE" ;;
+        *) echo "" ;;
+    esac
+}
+
 add_staff () {
+
+    restaurant=$(select_restaurant) || return
 
     chat_id=$(input_required "Staff chat_id: ")
     name=$(input_required "Staff name: ")
-    restaurant=$(input_required "Restaurant ID: ")
 
     echo
     echo "Add staff $name ($chat_id) to $restaurant?"
 
     if confirm; then
-        run_sql "INSERT INTO staff (chat_id,name,restaurant_id) VALUES ('$chat_id','$name','$restaurant');"
+        run_sql "INSERT INTO staff (chat_id,name,restaurant_id)
+        VALUES ('$chat_id','$name','$restaurant');"
         echo -e "${color_green}Staff added${color_reset}"
     fi
 
@@ -54,15 +103,17 @@ add_staff () {
 
 add_manager () {
 
+    restaurant=$(select_restaurant) || return
+
     chat_id=$(input_required "Manager chat_id: ")
     name=$(input_required "Manager name: ")
-    restaurant=$(input_required "Restaurant ID: ")
 
     echo
     echo "Create manager $name?"
 
     if confirm; then
-        run_sql "INSERT INTO managers (chat_id,name,restaurant_id) VALUES ('$chat_id','$name','$restaurant');"
+        run_sql "INSERT INTO managers (chat_id,name,restaurant_id)
+        VALUES ('$chat_id','$name','$restaurant');"
         echo -e "${color_green}Manager added${color_reset}"
     fi
 
@@ -96,13 +147,13 @@ delete_staff () {
 
 delete_restaurant () {
 
-    rid=$(input_required "Restaurant ID: ")
+    restaurant=$(select_restaurant) || return
 
     echo
-    echo -e "${color_red}WARNING: deleting restaurant removes all related data${color_reset}"
+    echo -e "${color_red}WARNING: this deletes the restaurant and related data${color_reset}"
 
     if confirm; then
-        run_sql "DELETE FROM restaurants WHERE restaurant_id='$rid';"
+        run_sql "DELETE FROM restaurants WHERE restaurant_id='$restaurant';"
         echo -e "${color_green}Restaurant deleted${color_reset}"
     fi
 
@@ -111,27 +162,48 @@ delete_restaurant () {
 
 edit_reminders () {
 
-    rid=$(input_required "Restaurant ID: ")
+    restaurant=$(select_restaurant) || return
 
-    read -r -p "Opening reminder time (HH:MM or blank): " open_time
-    read -r -p "Closing reminder time (HH:MM or blank): " close_time
+    read -r -p "Opening reminder time (PH HH:MM or blank to keep): " open_time
+    read -r -p "Closing reminder time (PH HH:MM or blank to keep): " close_time
 
-    run_sql "
-    UPDATE restaurants
-    SET opening_reminder_time='${open_time:-NULL}',
-        closing_reminder_time='${close_time:-NULL}'
-    WHERE restaurant_id='$rid';
-    "
+    if [[ -n "$open_time" ]]; then
+        open_utc=$(date -d "$open_time" -u +"%H:%M")
+        run_sql "UPDATE restaurants
+        SET opening_reminder_time='$open_utc'
+        WHERE restaurant_id='$restaurant';"
 
-    echo -e "${color_green}Reminder times updated${color_reset}"
+        echo -e "${color_green}Opening reminder stored as UTC $open_utc${color_reset}"
+    fi
+
+    if [[ -n "$close_time" ]]; then
+        close_utc=$(date -d "$close_time" -u +"%H:%M")
+        run_sql "UPDATE restaurants
+        SET closing_reminder_time='$close_utc'
+        WHERE restaurant_id='$restaurant';"
+
+        echo -e "${color_green}Closing reminder stored as UTC $close_utc${color_reset}"
+    fi
+
+    if [[ -z "$open_time" && -z "$close_time" ]]; then
+        echo "No changes made."
+    fi
 
     pause
 }
 
 add_checklist_step () {
 
-    rid=$(input_required "Restaurant ID: ")
-    checklist=$(input_required "Checklist ID (e.g DINING_OPEN): ")
+    restaurant=$(select_restaurant) || return
+
+    checklist=$(select_checklist)
+
+    if [[ -z "$checklist" ]]; then
+        echo "Invalid checklist selection"
+        pause
+        return
+    fi
+
     step=$(input_required "Step number: ")
     instruction=$(input_required "Instruction: ")
 
@@ -147,7 +219,7 @@ add_checklist_step () {
     INSERT INTO checklist_steps
     (restaurant_id,checklist_id,step_number,instruction,requires_photo)
     VALUES
-    ('$rid','$checklist',$step,'$instruction',$photo);
+    ('$restaurant','$checklist',$step,'$instruction',$photo);
     "
 
     echo -e "${color_green}Checklist step added${color_reset}"

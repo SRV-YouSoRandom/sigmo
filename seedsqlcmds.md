@@ -1,5 +1,11 @@
 # Sigmo – Seed SQL Commands
 
+## 0. Access Database Console
+Run this command on your server to enter the SQL shell:
+```bash
+docker compose -f docker-compose.prod.yml exec postgres psql -U sigmo -d sigmo
+```
+
 ## 1. Restaurant (Example ID: S0001)
 
 ```sql

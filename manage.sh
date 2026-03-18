@@ -20,6 +20,11 @@ run_sql() {
   $COMPOSE exec -T postgres psql -U sigmo -d sigmo -c "$1"
 }
 
+# Returns data as: id|name|branch|...
+query_sql() {
+  $COMPOSE exec -T postgres psql -U sigmo -d sigmo -At -c "$1"
+}
+
 input_required() {
   local prompt="$1"
   local value
@@ -35,26 +40,24 @@ input_required() {
   done
 }
 
-select_restaurant() {
+# ---------------------------------------------------------------------------
+# Restaurant Selection Helper
+# ---------------------------------------------------------------------------
 
-  restaurants=$(
-    $COMPOSE exec -T postgres psql -U sigmo -d sigmo -At \
-    -c "SELECT restaurant_id || '|' || name FROM restaurants;"
-  )
+select_restaurant() {
+  restaurants=$(query_sql "SELECT restaurant_id || '|' || name || ' (' || COALESCE(branch, 'No Branch') || ')' FROM restaurants ORDER BY name ASC;")
 
   if [[ -z "$restaurants" ]]; then
-    echo "No restaurants found."
-    pause
+    echo -e "${YELLOW}No restaurants found.${RESET}"
     return 1
   fi
 
   echo
   echo "Available Restaurants:"
-  echo
-
-  i=1
-  while IFS="|" read -r id name; do
-    echo "$i) $id | $name"
+  local i=1
+  declare -g -A ids
+  while IFS="|" read -r id display; do
+    echo "$i) $id | $display"
     ids[$i]=$id
     ((i++))
   done <<< "$restaurants"
@@ -63,220 +66,321 @@ select_restaurant() {
   read -r -p "Select restaurant number: " choice
 
   if [[ -z "${ids[$choice]}" ]]; then
-    echo "Invalid selection"
-    pause
+    echo -e "${RED}Invalid selection${RESET}"
     return 1
   fi
 
   SELECTED_RESTAURANT="${ids[$choice]}"
 }
 
-add_staff() {
+# ---------------------------------------------------------------------------
+# Time Conversion Helper (PHT to UTC)
+# ---------------------------------------------------------------------------
 
-  select_restaurant || return
-  restaurant="$SELECTED_RESTAURANT"
+convert_pht_to_utc() {
+  local pht_time="$1"
+  # PHP/PHT is UTC+8. We use TZ=Asia/Manila to ensure standard conversion.
+  # Note: 'date' behavior varies; this is for standard Linux date (GNU).
+  TZ=Asia/Manila date -d "$pht_time" +"%H:%M" -u 2>/dev/null
+}
 
-  chat_id=$(input_required "Staff chat_id: ")
-  name=$(input_required "Staff name: ")
+# ---------------------------------------------------------------------------
+# Restaurant Operations
+# ---------------------------------------------------------------------------
+
+add_restaurant() {
+  echo "--- Add Restaurant ---"
+  id=$(input_required "Restaurant ID (e.g. R001): ")
+  name=$(input_required "Name: ")
+  read -r -p "Branch (Optional): " branch
+  manager_chat_id=$(input_required "Admin/Manager Telegram Chat ID: ")
+  
+  echo "Reminder Times (Format HH:MM in PHT, e.g. 10:00)"
+  read -r -p "Opening Reminder [PHT]: " opht
+  read -r -p "Closing Reminder [PHT]: " cpht
+  read -r -p "Follow-up Delay (minutes, default 20): " follow
+
+  [[ -z "$follow" ]] && follow=20
+
+  outc="NULL"
+  cutc="NULL"
+  [[ -n "$opht" ]] && outc="'$(convert_pht_to_utc "$opht")'"
+  [[ -n "$cpht" ]] && cutc="'$(convert_pht_to_utc "$cpht")'"
 
   echo
-  echo "Add staff $name ($chat_id) to $restaurant?"
-
+  echo "Create restaurant $name?"
   if confirm; then
-    run_sql "INSERT INTO staff (chat_id,name,restaurant_id)
-    VALUES ('$chat_id','$name','$restaurant');"
+    run_sql "INSERT INTO restaurants (restaurant_id, name, branch, manager_chat_id, opening_reminder_time, closing_reminder_time, reminder_followup_minutes)
+    VALUES ('$id', '$name', '${branch:-NULL}', '$manager_chat_id', $outc, $cutc, $follow);"
+    echo -e "${GREEN}Restaurant created.${RESET}"
+  fi
+  pause
+}
 
-    echo -e "${GREEN}Staff added${RESET}"
+view_restaurants() {
+  echo "--- All Restaurants ---"
+  run_sql "SELECT restaurant_id, name, branch, manager_chat_id, opening_reminder_time as open_utc, closing_reminder_time as close_utc FROM restaurants ORDER BY name;"
+  pause
+}
+
+update_restaurant() {
+  select_restaurant || { pause; return; }
+  id="$SELECTED_RESTAURANT"
+
+  echo "Updating $id. Leave blank to keep current value."
+  read -r -p "New Name: " name
+  read -r -p "New Branch: " branch
+  read -r -p "New Manager Chat ID: " mid
+  read -r -p "Opening Reminder [PHT]: " opht
+  read -r -p "Closing Reminder [PHT]: " cpht
+  read -r -p "Follow-up Delay [mins]: " follow
+
+  [[ -n "$name" ]] && run_sql "UPDATE restaurants SET name='$name' WHERE restaurant_id='$id';"
+  [[ -n "$branch" ]] && run_sql "UPDATE restaurants SET branch='$branch' WHERE restaurant_id='$id';"
+  [[ -n "$mid" ]] && run_sql "UPDATE restaurants SET manager_chat_id='$mid' WHERE restaurant_id='$id';"
+  [[ -n "$follow" ]] && run_sql "UPDATE restaurants SET reminder_followup_minutes=$follow WHERE restaurant_id='$id';"
+  
+  if [[ -n "$opht" ]]; then
+    outc=$(convert_pht_to_utc "$opht")
+    run_sql "UPDATE restaurants SET opening_reminder_time='$outc' WHERE restaurant_id='$id';"
+  fi
+  if [[ -n "$cpht" ]]; then
+    cutc=$(convert_pht_to_utc "$cpht")
+    run_sql "UPDATE restaurants SET closing_reminder_time='$cutc' WHERE restaurant_id='$id';"
   fi
 
-  pause
-}
-
-add_manager() {
-
-  select_restaurant || return
-  restaurant="$SELECTED_RESTAURANT"
-
-  chat_id=$(input_required "Manager chat_id: ")
-  name=$(input_required "Manager name: ")
-
-  echo
-  echo "Create manager $name?"
-
-  if confirm; then
-    run_sql "INSERT INTO managers (chat_id,name,restaurant_id)
-    VALUES ('$chat_id','$name','$restaurant');"
-
-    echo -e "${GREEN}Manager added${RESET}"
-  fi
-
-  pause
-}
-
-view_staff() {
-  run_sql "SELECT chat_id,name,restaurant_id FROM staff;"
-  pause
-}
-
-view_managers() {
-  run_sql "SELECT chat_id,name,restaurant_id FROM managers;"
-  pause
-}
-
-delete_staff() {
-
-  chat_id=$(input_required "Chat ID to delete: ")
-
-  echo
-  echo -e "${YELLOW}Delete staff $chat_id?${RESET}"
-
-  if confirm; then
-    run_sql "DELETE FROM staff WHERE chat_id='$chat_id';"
-    echo -e "${GREEN}Staff deleted${RESET}"
-  fi
-
+  echo -e "${GREEN}Update complete.${RESET}"
   pause
 }
 
 delete_restaurant() {
-
-  select_restaurant || return
-  restaurant="$SELECTED_RESTAURANT"
-
-  echo
-  echo -e "${RED}WARNING: deleting this removes all related data${RESET}"
-
+  select_restaurant || { pause; return; }
+  echo -e "${RED}WARNING: This will delete ALL data for $SELECTED_RESTAURANT (Staff, Managers, Steps)${RESET}"
   if confirm; then
-    run_sql "DELETE FROM restaurants WHERE restaurant_id='$restaurant';"
-    echo -e "${GREEN}Restaurant deleted${RESET}"
+    run_sql "DELETE FROM restaurants WHERE restaurant_id='$SELECTED_RESTAURANT';"
+    echo -e "${GREEN}Deleted.${RESET}"
   fi
-
   pause
 }
 
-edit_reminders() {
+restaurant_menu() {
+  while true; do
+    clear
+    echo "=== RESTAURANT OPERATIONS ==="
+    echo "1. Add Restaurant"
+    echo "2. View All Restaurants"
+    echo "3. Update Restaurant"
+    echo "4. Delete Restaurant"
+    echo "5. Back"
+    echo
+    read -r -p "Select: " choice
+    case "$choice" in
+      1) add_restaurant ;;
+      2) view_restaurants ;;
+      3) update_restaurant ;;
+      4) delete_restaurant ;;
+      5) return ;;
+      *) echo "Invalid option"; sleep 1 ;;
+    esac
+  done
+}
 
-  select_restaurant || return
-  restaurant="$SELECTED_RESTAURANT"
+# ---------------------------------------------------------------------------
+# Staff Operations
+# ---------------------------------------------------------------------------
 
-  echo
-  read -r -p "Opening reminder time (PH HH:MM or blank to keep): " open_time
-  read -r -p "Closing reminder time (PH HH:MM or blank to keep): " close_time
-
-  if [[ -n "$open_time" ]]; then
-    open_utc=$(TZ=Asia/Manila date -d "$open_time" +"%H:%M" -u)
-
-    run_sql "
-    UPDATE restaurants
-    SET opening_reminder_time='$open_utc'
-    WHERE restaurant_id='$restaurant';
-    "
-
-    echo -e "${GREEN}Opening reminder stored as UTC $open_utc${RESET}"
+add_staff() {
+  select_restaurant || { pause; return; }
+  cid=$(input_required "Staff Chat ID: ")
+  name=$(input_required "Staff Name: ")
+  
+  if confirm; then
+    run_sql "INSERT INTO staff (chat_id, name, restaurant_id) VALUES ('$cid', '$name', '$SELECTED_RESTAURANT');"
+    echo -e "${GREEN}Staff added.${RESET}"
   fi
-
-  if [[ -n "$close_time" ]]; then
-    close_utc=$(TZ=Asia/Manila date -d "$close_time" +"%H:%M" -u)
-
-    run_sql "
-    UPDATE restaurants
-    SET closing_reminder_time='$close_utc'
-    WHERE restaurant_id='$restaurant';
-    "
-
-    echo -e "${GREEN}Closing reminder stored as UTC $close_utc${RESET}"
-  fi
-
-  if [[ -z "$open_time" && -z "$close_time" ]]; then
-    echo "No changes made."
-  fi
-
   pause
 }
+
+view_staff() {
+  echo "Filter by restaurant? (y/n)"
+  read -r filter
+  if [[ "$filter" == "y" ]]; then
+    select_restaurant || { pause; return; }
+    run_sql "SELECT chat_id, name FROM staff WHERE restaurant_id='$SELECTED_RESTAURANT';"
+  else
+    run_sql "SELECT chat_id, name, restaurant_id FROM staff ORDER BY restaurant_id;"
+  fi
+  pause
+}
+
+delete_staff() {
+  cid=$(input_required "Chat ID to delete: ")
+  if confirm; then
+    run_sql "DELETE FROM staff WHERE chat_id='$cid';"
+    echo -e "${GREEN}Deleted.${RESET}"
+  fi
+  pause
+}
+
+staff_menu() {
+  while true; do
+    clear
+    echo "=== STAFF OPERATIONS ==="
+    echo "1. Add Staff"
+    echo "2. View Staff"
+    echo "3. Delete Staff"
+    echo "4. Back"
+    echo
+    read -r -p "Select: " choice
+    case "$choice" in
+      1) add_staff ;;
+      2) view_staff ;;
+      3) delete_staff ;;
+      4) return ;;
+      *) echo "Invalid option"; sleep 1 ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Manager Operations
+# ---------------------------------------------------------------------------
+
+add_manager_op() {
+  select_restaurant || { pause; return; }
+  cid=$(input_required "Manager Chat ID: ")
+  name=$(input_required "Manager Name: ")
+  
+  if confirm; then
+    run_sql "INSERT INTO managers (chat_id, name, restaurant_id) VALUES ('$cid', '$name', '$SELECTED_RESTAURANT');"
+    echo -e "${GREEN}Manager added.${RESET}"
+  fi
+  pause
+}
+
+view_managers_op() {
+  echo "Filter by restaurant? (y/n)"
+  read -r filter
+  if [[ "$filter" == "y" ]]; then
+    select_restaurant || { pause; return; }
+    run_sql "SELECT chat_id, name FROM managers WHERE restaurant_id='$SELECTED_RESTAURANT';"
+  else
+    run_sql "SELECT chat_id, name, restaurant_id FROM managers ORDER BY restaurant_id;"
+  fi
+  pause
+}
+
+delete_manager_op() {
+  cid=$(input_required "Chat ID to delete: ")
+  if confirm; then
+    run_sql "DELETE FROM managers WHERE chat_id='$cid';"
+    echo -e "${GREEN}Deleted.${RESET}"
+  fi
+  pause
+}
+
+manager_menu() {
+  while true; do
+    clear
+    echo "=== MANAGER OPERATIONS ==="
+    echo "1. Add Manager"
+    echo "2. View Managers"
+    echo "3. Delete Manager"
+    echo "4. Back"
+    echo
+    read -r -p "Select: " choice
+    case "$choice" in
+      1) add_manager_op ;;
+      2) view_managers_op ;;
+      3) delete_manager_op ;;
+      4) return ;;
+      *) echo "Invalid option"; sleep 1 ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Checklist Operations
+# ---------------------------------------------------------------------------
 
 add_checklist_step() {
-
-  select_restaurant || return
-  restaurant="$SELECTED_RESTAURANT"
-
-  echo
-  echo "Select Checklist"
-  echo "1) Kitchen Opening"
-  echo "2) Kitchen Closing"
-  echo "3) Dining Opening"
-  echo "4) Dining Closing"
-
-  read -r -p "Select option: " c
-
+  select_restaurant || { pause; return; }
+  echo "Select Checklist Type:"
+  echo "1. Kitchen Opening"
+  echo "2. Kitchen Closing"
+  echo "3. Dining Opening"
+  echo "4. Dining Closing"
+  read -r -p "Choice: " c
   case "$c" in
-    1) checklist="KITCHEN_OPEN" ;;
-    2) checklist="KITCHEN_CLOSE" ;;
-    3) checklist="DINING_OPEN" ;;
-    4) checklist="DINING_CLOSE" ;;
+    1) clid="KITCHEN_OPEN" ;;
+    2) clid="KITCHEN_CLOSE" ;;
+    3) clid="DINING_OPEN" ;;
+    4) clid="DINING_CLOSE" ;;
     *) echo "Invalid"; pause; return ;;
   esac
 
-  step=$(input_required "Step number: ")
-  instruction=$(input_required "Instruction: ")
+  num=$(input_required "Step Number: ")
+  inst=$(input_required "Instruction: ")
+  read -r -p "Requires Photo? (y/n): " photo
+  [[ "$photo" == "y" ]] && photo="true" || photo="false"
 
-  read -r -p "Requires photo? (y/n): " photo
-
-  if [[ "$photo" == "y" ]]; then
-    photo=true
-  else
-    photo=false
-  fi
-
-  run_sql "
-  INSERT INTO checklist_steps
-  (restaurant_id,checklist_id,step_number,instruction,requires_photo)
-  VALUES
-  ('$restaurant','$checklist',$step,'$instruction',$photo);
-  "
-
-  echo -e "${GREEN}Checklist step added${RESET}"
-
+  run_sql "INSERT INTO checklist_steps (restaurant_id, checklist_id, step_number, instruction, requires_photo)
+  VALUES ('$SELECTED_RESTAURANT', '$clid', $num, '$inst', $photo);"
+  echo -e "${GREEN}Step added.${RESET}"
   pause
 }
 
-menu() {
-
-while true; do
-
-clear
-
-echo "================================"
-echo "        SIGMO ADMIN TOOL        "
-echo "================================"
-echo
-echo "1) Add Staff"
-echo "2) Add Manager"
-echo "3) View Staff"
-echo "4) View Managers"
-echo "5) Delete Staff"
-echo "6) Delete Restaurant"
-echo "7) Edit Reminder Times"
-echo "8) Add Checklist Step"
-echo "9) Exit"
-echo
-
-read -r -p "Select option: " choice
-
-case "$choice" in
-  1) add_staff ;;
-  2) add_manager ;;
-  3) view_staff ;;
-  4) view_managers ;;
-  5) delete_staff ;;
-  6) delete_restaurant ;;
-  7) edit_reminders ;;
-  8) add_checklist_step ;;
-  9) exit 0 ;;
-  *) echo "Invalid option"; pause ;;
-esac
-
-done
-
+view_checklist_steps() {
+  select_restaurant || { pause; return; }
+  run_sql "SELECT checklist_id, step_number, instruction, requires_photo FROM checklist_steps WHERE restaurant_id='$SELECTED_RESTAURANT' ORDER BY checklist_id, step_number;"
+  pause
 }
 
-menu
+checklist_menu() {
+  while true; do
+    clear
+    echo "=== CHECKLIST OPERATIONS ==="
+    echo "1. Add Step"
+    echo "2. View Steps (by Restaurant)"
+    echo "3. Back"
+    echo
+    read -r -p "Select: " choice
+    case "$choice" in
+      1) add_checklist_step ;;
+      2) view_checklist_steps ;;
+      3) return ;;
+      *) echo "Invalid option"; sleep 1 ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Main Execution Loop
+# ---------------------------------------------------------------------------
+
+main_menu() {
+  while true; do
+    clear
+    echo "================================"
+    echo "        SIGMO ADMIN TOOL        "
+    echo "================================"
+    echo
+    echo "1) Staff Operations"
+    echo "2) Manager Operations"
+    echo "3) Restaurant Operations"
+    echo "4) Checklist Operations"
+    echo "5) Exit"
+    echo
+    read -r -p "Select option: " choice
+    case "$choice" in
+      1) staff_menu ;;
+      2) manager_menu ;;
+      3) restaurant_menu ;;
+      4) checklist_menu ;;
+      5) exit 0 ;;
+      *) echo -e "${RED}Invalid selection${RESET}"; sleep 1 ;;
+    esac
+  done
+}
+
+main_menu

@@ -40,3 +40,19 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+# ---------------------------------------------------------------------------
+# Timezone helper – display times in PHT (UTC+8)
+# ---------------------------------------------------------------------------
+from datetime import timedelta, timezone
+
+PHT = timezone(timedelta(hours=8))
+
+
+def to_pht(dt) -> "datetime":
+    """Convert a naive-UTC datetime to PHT (UTC+8) for user-facing display."""
+    from datetime import datetime as _dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(PHT)

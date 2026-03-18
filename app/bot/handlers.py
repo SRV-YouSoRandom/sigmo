@@ -5,6 +5,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.commands import parse_command
+from app.core.config import to_pht
 from app.bot.notifier import (
     CHECKLIST_KEYBOARD,
     MANAGER_KEYBOARD,
@@ -191,7 +192,7 @@ async def _handle_callback_query(callback_query: dict) -> None:
                 await edit_message_reply_markup(chat_id, message_id, reply_markup={"inline_keyboard": []})
                 await send_telegram_message(
                     chat_id,
-                    f"✅ <b>Issue #{issue.id} resolved</b> at {issue.resolved_at.strftime('%I:%M %p')}",
+                    f"✅ <b>Issue #{issue.id} resolved</b> at {to_pht(issue.resolved_at).strftime('%I:%M %p')}",
                     reply_markup=MANAGER_KEYBOARD,
                 )
             else:

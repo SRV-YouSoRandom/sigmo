@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.commands import parse_command
+from app.core.config import to_pht
 from app.models.checklist_run import ChecklistRun
 from app.models.checklist_step import ChecklistStep
 from app.models.issue_report import IssueReport
@@ -130,7 +131,7 @@ async def start_checklist(db: AsyncSession, chat_id: str, text: str) -> dict:
     restaurant = await _get_restaurant(db, staff.restaurant_id)
 
     label = CHECKLIST_LABELS.get(checklist_id, checklist_id)
-    now = datetime.utcnow().strftime("%I:%M %p")
+    now = to_pht(datetime.utcnow()).strftime("%I:%M %p")
     branch = _branch_label(restaurant)
 
     return {
@@ -244,8 +245,8 @@ async def _complete_checklist(
     staff = await _get_staff(db, session.chat_id)
     restaurant = await _get_restaurant(db, session.restaurant_id)
     branch = _branch_label(restaurant)
-    start_str = session.started_at.strftime("%I:%M %p")
-    end_str = datetime.utcnow().strftime("%I:%M %p")
+    start_str = to_pht(session.started_at).strftime("%I:%M %p")
+    end_str = to_pht(datetime.utcnow()).strftime("%I:%M %p")
 
     manager_msg = (
         f"✅ <b>{staff.name}</b> completed <b>{label}</b>\n"

@@ -2,6 +2,8 @@
 
 from datetime import datetime
 
+from app.core.config import to_pht
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,7 +51,7 @@ async def get_today_staff_status(db: AsyncSession, restaurant_id: str) -> str:
     )
     paused_sessions = paused_result.scalars().all()
 
-    lines = [f"👥 <b>Staff Status – {datetime.utcnow().strftime('%b %d, %Y')}</b>\n"]
+    lines = [f"👥 <b>Staff Status – {to_pht(datetime.utcnow()).strftime('%b %d, %Y')}</b>\n"]
 
     if paused_sessions:
         lines.append("🔴 <b>Paused (Critical Issue)</b>")
@@ -78,8 +80,8 @@ async def get_today_staff_status(db: AsyncSession, restaurant_id: str) -> str:
             staff_res = await db.execute(select(Staff).where(Staff.chat_id == r.chat_id))
             staff = staff_res.scalars().first()
             label = CHECKLIST_LABELS.get(r.checklist_id, r.checklist_id)
-            start = r.start_time.strftime("%I:%M %p") if r.start_time else "?"
-            end = r.end_time.strftime("%I:%M %p") if r.end_time else "?"
+            start = to_pht(r.start_time).strftime("%I:%M %p") if r.start_time else "?"
+            end = to_pht(r.end_time).strftime("%I:%M %p") if r.end_time else "?"
             icon = "✅" if r.status == "completed" else "❌"
             name = staff.name if staff else r.chat_id
             lines.append(f"  {icon} {name} – {label}")
@@ -111,7 +113,7 @@ async def build_issues_messages(
         staff = staff_res.scalars().first()
         label = CHECKLIST_LABELS.get(issue.checklist_id, issue.checklist_id)
         name = staff.name if staff else issue.chat_id
-        reported = issue.reported_at.strftime("%b %d %I:%M %p")
+        reported = to_pht(issue.reported_at).strftime("%b %d %I:%M %p")
         type_icon = "🔴" if issue.issue_type == "critical" else "🟡"
         type_label = "Critical" if issue.issue_type == "critical" else "Operational"
 

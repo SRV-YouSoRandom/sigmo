@@ -1,6 +1,8 @@
 """Daily summary report builder."""
 
 from datetime import datetime, timedelta
+
+from app.core.config import to_pht
 from typing import Optional
 
 from sqlalchemy import select
@@ -49,7 +51,7 @@ def build_summary_message(
 ) -> str:
     if date_str is None:
         yesterday = datetime.utcnow() - timedelta(days=1)
-        date_str = yesterday.strftime("%Y-%m-%d")
+        date_str = to_pht(yesterday).strftime("%Y-%m-%d")
 
     # Build header with branch if available
     location = ""
@@ -67,8 +69,8 @@ def build_summary_message(
 
     for run in runs:
         label = CHECKLIST_LABELS.get(run["checklist_id"], run["checklist_id"])
-        start = run["start_time"].strftime("%I:%M %p") if run["start_time"] else "N/A"
-        end = run["end_time"].strftime("%I:%M %p") if run["end_time"] else "N/A"
+        start = to_pht(run["start_time"]).strftime("%I:%M %p") if run["start_time"] else "N/A"
+        end = to_pht(run["end_time"]).strftime("%I:%M %p") if run["end_time"] else "N/A"
         lines.append(f"✅ <b>{label}</b>")
         lines.append(f"   {run['staff_name']}  {start} → {end}")
         lines.append("")

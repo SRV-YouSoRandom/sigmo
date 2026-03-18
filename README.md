@@ -111,14 +111,12 @@ Sigmo includes a simple terminal-based management tool that allows managers or a
 
 The tool provides a guided interface for:
 
-- Adding staff members
-- Adding managers
-- Viewing staff
-- Viewing managers
-- Deleting staff
-- Deleting restaurants
-- Editing reminder times
-- Adding checklist steps
+- **Full Restaurant CRUD**: Add, View, Update, and Delete restaurants (including branch and reminder settings).
+- **Staff & Manager Management**: Add/Remove users and view them globally or filtered by restaurant.
+- **Checklist Management**: Full control over checklist steps (Add, View, Update, Delete) for any restaurant.
+- **PHT to UTC Conversion**: Input reminder times in Philippines Time (PHT); the tool automatically converts them to UTC for the database.
+- **Cancel/Back Support**: Type `q` or `back` at any input prompt to return to the previous menu.
+- **Safety**: Automatically cleans up all dependent records when deleting a restaurant or staff member.
 
 This tool safely executes the necessary database commands inside the Docker environment.
 
@@ -204,18 +202,29 @@ You will see the main menu:
         SIGMO ADMIN TOOL
 ================================
 
-1) Add Staff
-2) Add Manager
-3) View Staff
-4) View Managers
-5) Delete Staff
-6) Delete Restaurant
-7) Edit Reminder Times
-8) Add Checklist Step
-9) Exit
+1) Staff Operations
+2) Manager Operations
+3) Restaurant Operations
+4) Checklist Operations
+5) Exit
 ```
 
-Select the number corresponding to the action you want.
+Each option leads to a specialized sub-menu where you can perform specific CRUD operations.
+
+---
+
+# Key Features
+
+### 1. Philippines Time (PHT) Support
+When setting reminder times, you no longer need to calculate UTC yourself. Simply enter the time in **PHT (24-hour format)**, and the script handles the conversion:
+- Input: `10:00` (PHT)
+- Result: Stored as `02:00` (UTC)
+
+### 2. Universal Cancel
+At any point during an operation (like adding a staff name or setting a reminder), you can type `q` or `back` to immediately stop and return to the menu.
+
+### 3. Safe Deletions
+The tool handles complex database relationships. Deleting a restaurant or staff member automatically removes all associated sessions, photos, and history to prevent database errors.
 
 ---
 

@@ -1,16 +1,16 @@
 # Sigmo – Seed SQL Commands
 
-## 1. Restaurant
+## 1. Restaurant (Example ID: S0001)
 
 ```sql
 INSERT INTO restaurants (restaurant_id, name, branch, manager_chat_id, opening_reminder_time, closing_reminder_time, reminder_followup_minutes)
 VALUES (
-  'R001',
-  'My Restaurant',
-  'Makati',                  -- branch name, or NULL if not needed
+  'S0001',
+  'Sigmo Bistro',
+  'Main Branch',             -- branch name, or NULL if not needed
   '<manager_telegram_chat_id>',
-  '10:00',                   -- opening reminder time (24h, UTC). NULL to disable.
-  '22:00',                   -- closing reminder time (24h, UTC). NULL to disable.
+  '02:00',                   -- opening reminder time (24h, UTC). 02:00 UTC = 10:00 AM PHT.
+  '14:00',                   -- closing reminder time (24h, UTC). 14:00 UTC = 10:00 PM PHT.
   20                         -- minutes after reminder to send follow-up if not started
 );
 ```
@@ -19,52 +19,53 @@ VALUES (
 
 ```sql
 INSERT INTO managers (chat_id, name, restaurant_id)
-VALUES ('<manager_telegram_chat_id>', 'Manager Name', 'R001');
+VALUES ('<manager_telegram_chat_id>', 'Manager Name', 'S0001');
 ```
 
 ## 3. Staff (repeat for each person)
 
 ```sql
 INSERT INTO staff (chat_id, name, restaurant_id)
-VALUES ('<staff_telegram_chat_id>', 'Staff Name', 'R001');
+VALUES ('<staff_telegram_chat_id>', 'Staff Name', 'S0001');
 ```
 
-## 4. Dining Opening checklist steps
+## 4. Checklist Steps (All Types)
 
+### Dining Opening
 ```sql
 INSERT INTO checklist_steps (restaurant_id, checklist_id, step_number, instruction, requires_photo) VALUES
-('R001', 'DINING_OPEN', 1,  'Turn on lights', false),
-('R001', 'DINING_OPEN', 2,  'Turn on AC', false),
-('R001', 'DINING_OPEN', 3,  'Turn on sounds', false),
-('R001', 'DINING_OPEN', 4,  'Turn on POS and let it boot', false),
-('R001', 'DINING_OPEN', 5,  'Read endorsements if any', false),
-('R001', 'DINING_OPEN', 6,  'Turn on coffee machine', false),
-('R001', 'DINING_OPEN', 7,  'Turn on coffee grinder', false),
-('R001', 'DINING_OPEN', 8,  'Set up tables and chairs inside and outside', false),
-('R001', 'DINING_OPEN', 9,  'Sanitize tables and chairs inside and outside. Send a photo when done.', true),
-('R001', 'DINING_OPEN', 10, 'Sweep floors inside', false),
-('R001', 'DINING_OPEN', 11, 'Mop floors inside. Send a photo when done.', true),
-('R001', 'DINING_OPEN', 12, 'Clean outdoor glasses. Send a photo when done.', true),
-('R001', 'DINING_OPEN', 13, 'Sweep outside floor', false),
-('R001', 'DINING_OPEN', 14, 'Mop outside floor. Send a photo when done.', true),
-('R001', 'DINING_OPEN', 15, 'Clean toilet. Send a photo when done.', true),
-('R001', 'DINING_OPEN', 16, 'Refill toilet tissues if needed', false),
-('R001', 'DINING_OPEN', 17, 'Wash hands', false),
-('R001', 'DINING_OPEN', 18, 'Set up plates and utensils per table. Send a photo when done.', true),
-('R001', 'DINING_OPEN', 19, 'Calibrate coffee machine', false),
-('R001', 'DINING_OPEN', 20, 'Check dining equipment if clean and functioning', false),
-('R001', 'DINING_OPEN', 21, 'Conduct inventory', false),
-('R001', 'DINING_OPEN', 22, 'Prepare POS and cash count. Send a photo when done.', true),
-('R001', 'DINING_OPEN', 23, 'Clean condiments and unused plates and utensils', false),
-('R001', 'DINING_OPEN', 24, 'Wait for opening time', false),
-('R001', 'DINING_OPEN', 25, 'Unlock doors', false);
+('S0001', 'DINING_OPEN', 1, 'Turn on lights', false),
+('S0001', 'DINING_OPEN', 8, 'Set up tables and chairs inside and outside', true),
+('S0001', 'DINING_OPEN', 25, 'Unlock doors', false);
+```
+
+### Dining Closing
+```sql
+INSERT INTO checklist_steps (restaurant_id, checklist_id, step_number, instruction, requires_photo) VALUES
+('S0001', 'DINING_CLOSE', 1, 'Lock the doors', false),
+('S0001', 'DINING_CLOSE', 7, 'Clean and sanitize tables and chairs', true),
+('S0001', 'DINING_CLOSE', 26, 'Double-check doors are closed', true);
+```
+
+### Kitchen Opening
+```sql
+INSERT INTO checklist_steps (restaurant_id, checklist_id, step_number, instruction, requires_photo) VALUES
+('S0001', 'KITCHEN_OPEN', 1, 'Turn on kitchen lights', false),
+('S0001', 'KITCHEN_OPEN', 3, 'Check kitchen cleanliness', true),
+('S0001', 'KITCHEN_OPEN', 18, 'Prepare service tools and utensils', false);
+```
+
+### Kitchen Closing
+```sql
+INSERT INTO checklist_steps (restaurant_id, checklist_id, step_number, instruction, requires_photo) VALUES
+('S0001', 'KITCHEN_CLOSE', 1, 'Conduct evening inventory', true),
+('S0001', 'KITCHEN_CLOSE', 4, 'Clean pizza prep station', true),
+('S0001', 'KITCHEN_CLOSE', 18, 'Final kitchen cleanliness check', false);
 ```
 
 ---
 
 ## Notes
-
-- **Reminder times are in UTC.** Adjust for your timezone (e.g. if you're UTC+8, a 10:00 AM local reminder = `02:00` here).
-- Set `opening_reminder_time` or `closing_reminder_time` to `NULL` to disable that reminder entirely.
-- `reminder_followup_minutes` controls how long after the first reminder the follow-up fires if no checklist has been started.
-- `branch` is optional — leave as `NULL` if you only have one location.
+- **IDs MUST match bot code**: Use `_OPEN` and `_CLOSE` (NOT Opening/Closing).
+- **Time is UTC**: Adjust your local time to UTC before inserting.
+- **Photos**: Set `requires_photo` to `true` (t) or `false` (f).

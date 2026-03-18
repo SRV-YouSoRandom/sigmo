@@ -155,10 +155,38 @@ update_restaurant() {
 
 delete_restaurant() {
   select_restaurant || { pause; return; }
-  echo -e "${RED}WARNING: This will delete ALL data for $SELECTED_RESTAURANT (Staff, Managers, Steps)${RESET}"
+  id="$SELECTED_RESTAURANT"
+
+  echo -e "${RED}WARNING: This will delete ALL data for $id (Staff, Managers, Steps, Sessions)${RESET}"
   if confirm; then
-    run_sql "DELETE FROM restaurants WHERE restaurant_id='$SELECTED_RESTAURANT';"
-    echo -e "${GREEN}Deleted.${RESET}"
+    # Delete in order of dependency
+    echo "Cleaning up dependent records..."
+    
+    # 1. Step Photos (linked to sessions)
+    run_sql "DELETE FROM step_photos WHERE session_id IN (SELECT id FROM sessions WHERE restaurant_id='$id');"
+    
+    # 2. Issue Reports
+    run_sql "DELETE FROM issue_reports WHERE restaurant_id='$id';"
+    
+    # 3. Sessions
+    run_sql "DELETE FROM sessions WHERE restaurant_id='$id';"
+    
+    # 4. Checklist Runs
+    run_sql "DELETE FROM checklist_runs WHERE restaurant_id='$id';"
+    
+    # 5. Checklist Steps
+    run_sql "DELETE FROM checklist_steps WHERE restaurant_id='$id';"
+    
+    # 6. Staff
+    run_sql "DELETE FROM staff WHERE restaurant_id='$id';"
+    
+    # 7. Managers
+    run_sql "DELETE FROM managers WHERE restaurant_id='$id';"
+    
+    # 8. Finally, the Restaurant
+    run_sql "DELETE FROM restaurants WHERE restaurant_id='$id';"
+    
+    echo -e "${GREEN}Restaurant and all related data deleted.${RESET}"
   fi
   pause
 }
@@ -215,9 +243,22 @@ view_staff() {
 
 delete_staff() {
   cid=$(input_required "Chat ID to delete: ")
+  echo -e "${YELLOW}Delete staff $cid and all related history?${RESET}"
+
   if confirm; then
+    echo "Cleaning up dependent records..."
+    # 1. Step Photos (linked to sessions)
+    run_sql "DELETE FROM step_photos WHERE session_id IN (SELECT id FROM sessions WHERE chat_id='$cid');"
+    # 2. Issue Reports
+    run_sql "DELETE FROM issue_reports WHERE chat_id='$cid';"
+    # 3. Sessions
+    run_sql "DELETE FROM sessions WHERE chat_id='$cid';"
+    # 4. Checklist Runs
+    run_sql "DELETE FROM checklist_runs WHERE chat_id='$cid';"
+    # 5. Finally, the Staff
     run_sql "DELETE FROM staff WHERE chat_id='$cid';"
-    echo -e "${GREEN}Deleted.${RESET}"
+    
+    echo -e "${GREEN}Staff and related data deleted.${RESET}"
   fi
   pause
 }
@@ -303,8 +344,7 @@ manager_menu() {
 # Checklist Operations
 # ---------------------------------------------------------------------------
 
-add_checklist_step() {
-  select_restaurant || { pause; return; }
+_select_checklist_type() {
   echo "Select Checklist Type:"
   echo "1. Kitchen Opening"
   echo "2. Kitchen Closing"
@@ -316,8 +356,16 @@ add_checklist_step() {
     2) clid="KITCHEN_CLOSE" ;;
     3) clid="DINING_OPEN" ;;
     4) clid="DINING_CLOSE" ;;
-    *) echo "Invalid"; pause; return ;;
+    *) echo "Invalid"; return 1 ;;
   esac
+  export SELECTED_CHECKLIST_ID="$clid"
+  return 0
+}
+
+add_checklist_step() {
+  select_restaurant || { pause; return; }
+  _select_checklist_type || { pause; return; }
+  clid="$SELECTED_CHECKLIST_ID"
 
   num=$(input_required "Step Number: ")
   inst=$(input_required "Instruction: ")
@@ -336,19 +384,69 @@ view_checklist_steps() {
   pause
 }
 
+update_checklist_step() {
+  select_restaurant || { pause; return; }
+  _select_checklist_type || { pause; return; }
+  clid="$SELECTED_CHECKLIST_ID"
+
+  num=$(input_required "Step Number to update: ")
+  
+  # Verify step exists
+  exists=$(query_sql "SELECT id FROM checklist_steps WHERE restaurant_id='$SELECTED_RESTAURANT' AND checklist_id='$clid' AND step_number=$num;")
+  if [[ -z "$exists" ]]; then
+    echo -e "${RED}Step not found.${RESET}"
+    pause
+    return
+  fi
+
+  echo "Updating Step $num. Leave blank to keep current value."
+  read -r -p "New Instruction: " inst
+  read -r -p "Change Requires Photo? (y/n/skip): " photo
+
+  [[ -n "$inst" ]] && run_sql "UPDATE checklist_steps SET instruction='$inst' WHERE restaurant_id='$SELECTED_RESTAURANT' AND checklist_id='$clid' AND step_number=$num;"
+  
+  if [[ "$photo" == "y" ]]; then
+    run_sql "UPDATE checklist_steps SET requires_photo=true WHERE restaurant_id='$SELECTED_RESTAURANT' AND checklist_id='$clid' AND step_number=$num;"
+  elif [[ "$photo" == "n" ]]; then
+    run_sql "UPDATE checklist_steps SET requires_photo=false WHERE restaurant_id='$SELECTED_RESTAURANT' AND checklist_id='$clid' AND step_number=$num;"
+  fi
+
+  echo -e "${GREEN}Update complete.${RESET}"
+  pause
+}
+
+delete_checklist_step() {
+  select_restaurant || { pause; return; }
+  _select_checklist_type || { pause; return; }
+  clid="$SELECTED_CHECKLIST_ID"
+
+  num=$(input_required "Step Number to delete: ")
+  
+  echo -e "${YELLOW}Delete step $num from $clid?${RESET}"
+  if confirm; then
+    run_sql "DELETE FROM checklist_steps WHERE restaurant_id='$SELECTED_RESTAURANT' AND checklist_id='$clid' AND step_number=$num;"
+    echo -e "${GREEN}Step deleted.${RESET}"
+  fi
+  pause
+}
+
 checklist_menu() {
   while true; do
     clear
     echo "=== CHECKLIST OPERATIONS ==="
     echo "1. Add Step"
     echo "2. View Steps (by Restaurant)"
-    echo "3. Back"
+    echo "3. Update Step"
+    echo "4. Delete Step"
+    echo "5. Back"
     echo
     read -r -p "Select: " choice
     case "$choice" in
       1) add_checklist_step ;;
       2) view_checklist_steps ;;
-      3) return ;;
+      3) update_checklist_step ;;
+      4) delete_checklist_step ;;
+      5) return ;;
       *) echo "Invalid option"; sleep 1 ;;
     esac
   done

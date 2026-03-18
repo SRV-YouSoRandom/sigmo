@@ -3,14 +3,16 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from fastapi.testclient import TestClient
-
 
 @pytest.fixture
 def client():
     """Create a FastAPI test client with mocked startup dependencies."""
-    with patch("app.core.scheduler.scheduler"):
+    with patch("app.core.scheduler.scheduler"), \
+         patch("app.core.scheduler.schedule_restaurant_reminders", new_callable=AsyncMock), \
+         patch("app.bot.notifier.register_bot_commands", new_callable=AsyncMock), \
+         patch("app.bot.handlers.process_update", new_callable=AsyncMock):
         from app.main import app
+        from fastapi.testclient import TestClient
         return TestClient(app)
 
 

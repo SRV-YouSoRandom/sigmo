@@ -17,7 +17,7 @@ async def test_photo_step_stores_file_id(seeded_db):
         seeded_db, "123456", is_photo=True, file_id="telegram_photo_abc"
     )
 
-    assert "Photo received" in result["reply"]
+    assert "Step 3 of 3" in result["reply"]
 
     # Verify photo was stored
     photos = await seeded_db.execute(select(StepPhoto))

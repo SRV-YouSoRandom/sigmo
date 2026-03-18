@@ -63,20 +63,15 @@ async def test_opening_followup_skips_if_started(seeded_db):
     seeded_db.add(session)
     await seeded_db.commit()
 
-    with patch("app.core.scheduler.send_telegram_message", new_callable=AsyncMock) as mock_send, \
-         patch("app.core.scheduler.get_async_session") as mock_factory:
-        mock_factory.return_value = AsyncMock()
-        mock_factory.return_value().__aenter__ = AsyncMock(return_value=seeded_db)
-        mock_factory.return_value().__aexit__ = AsyncMock(return_value=False)
+    from app.core.scheduler import _send_opening_followup
+    from app.models.restaurant import Restaurant
 
-        from app.core.scheduler import _send_opening_followup
-        # Patch internals to use seeded_db directly
-        with patch("app.core.scheduler._any_checklist_started_today", new_callable=AsyncMock, return_value=True):
-            with patch("app.core.scheduler._get_restaurant_and_staff", new_callable=AsyncMock) as mock_rns:
-                from app.models.restaurant import Restaurant
-                mock_rns.return_value = (
-                    Restaurant(restaurant_id="R001", name="Test", manager_chat_id="999"),
-                    [],
-                )
-                await _send_opening_followup("R001")
-                mock_send.assert_not_called()
+    with patch("app.core.scheduler.send_telegram_message", new_callable=AsyncMock) as mock_send, \
+         patch("app.core.scheduler._get_restaurant_and_staff", new_callable=AsyncMock) as mock_rns, \
+         patch("app.core.scheduler._any_checklist_started_today", new_callable=AsyncMock, return_value=True):
+        mock_rns.return_value = (
+            Restaurant(restaurant_id="R001", name="Test", manager_chat_id="999"),
+            [],
+        )
+        await _send_opening_followup("R001")
+        mock_send.assert_not_called()

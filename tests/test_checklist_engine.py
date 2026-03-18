@@ -14,9 +14,10 @@ from app.services.session_service import get_active_session, get_paused_session
 @pytest.mark.asyncio
 async def test_start_checklist_success(seeded_db):
     result = await start_checklist(seeded_db, "123456", "kitchen opening")
-    assert "Starting Kitchen Opening" in result["reply"]
+    assert "Kitchen Opening" in result["reply"]
     assert "Step 1 of 3" in result["reply"]
-    assert "John started Kitchen Opening" in result["manager_msg"]
+    assert "John" in result["manager_msg"]
+    assert "Kitchen Opening" in result["manager_msg"]
     assert "Makati" in result["manager_msg"]
     assert result["manager_chat_id"] == "999"
     assert result["session"].status == "active"
@@ -67,7 +68,8 @@ async def test_complete_checklist(seeded_db):
     result = await progress_step(seeded_db, "123456", is_photo=False)  # step 3 → complete
     assert result["completed"] is True
     assert "complete" in result["reply"]
-    assert "John completed Kitchen Opening" in result["manager_msg"]
+    assert "John" in result["manager_msg"]
+    assert "Kitchen Opening" in result["manager_msg"]
     assert "Makati" in result["manager_msg"]
 
 

@@ -1,29 +1,30 @@
 """Tests for manager notification triggers."""
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.bot.notifier import notify_manager, send_telegram_message
 
 
 @pytest.mark.asyncio
 async def test_send_telegram_message_success():
-    """Successful Telegram API call returns True."""
+    """Successful Telegram API call returns the message_id."""
     with patch("app.bot.notifier.get_client") as mock_get:
         mock_client = AsyncMock()
-        mock_response = AsyncMock()
-        mock_response.raise_for_status = lambda: None
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"result": {"message_id": 42}}
         mock_client.post.return_value = mock_response
         mock_get.return_value = mock_client
 
         result = await send_telegram_message("12345", "hello")
-        assert result is True
+        assert result == 42
         mock_client.post.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_send_telegram_message_failure():
-    """Failed Telegram API call returns False."""
+    """Failed Telegram API call returns None."""
     import httpx
 
     with patch("app.bot.notifier.get_client") as mock_get:
@@ -32,7 +33,7 @@ async def test_send_telegram_message_failure():
         mock_get.return_value = mock_client
 
         result = await send_telegram_message("12345", "hello")
-        assert result is False
+        assert result is None
 
 
 @pytest.mark.asyncio

@@ -30,10 +30,13 @@ input_required() {
   local value
 
   while true; do
-    read -r -p "$prompt" value
+    read -r -p "$prompt (or 'q' to cancel): " value
+    if [[ "$value" == "q" || "$value" == "back" ]]; then
+      return 2
+    fi
     if [[ -n "$value" ]]; then
       echo "$value"
-      return
+      return 0
     else
       echo -e "${RED}Value cannot be empty${RESET}"
     fi
@@ -63,7 +66,9 @@ select_restaurant() {
   done <<< "$restaurants"
 
   echo
-  read -r -p "Select restaurant number: " choice
+  read -r -p "Select restaurant number (or 'q' to cancel): " choice
+
+  [[ "$choice" == "q" || "$choice" == "back" ]] && return 1
 
   if [[ -z "${ids[$choice]}" ]]; then
     echo -e "${RED}Invalid selection${RESET}"
@@ -90,15 +95,20 @@ convert_pht_to_utc() {
 
 add_restaurant() {
   echo "--- Add Restaurant ---"
-  id=$(input_required "Restaurant ID (e.g. R001): ")
-  name=$(input_required "Name: ")
-  read -r -p "Branch (Optional): " branch
-  manager_chat_id=$(input_required "Admin/Manager Telegram Chat ID: ")
+  id=$(input_required "Restaurant ID (e.g. R001)") || return
+  name=$(input_required "Name") || return
+  read -r -p "Branch (Optional, 'q' to cancel): " branch
+  [[ "$branch" == "q" || "$branch" == "back" ]] && return
+  
+  manager_chat_id=$(input_required "Admin/Manager Telegram Chat ID") || return
   
   echo "Reminder Times (Format HH:MM in PHT, e.g. 10:00)"
-  read -r -p "Opening Reminder [PHT]: " opht
-  read -r -p "Closing Reminder [PHT]: " cpht
-  read -r -p "Follow-up Delay (minutes, default 20): " follow
+  read -r -p "Opening Reminder [PHT] ('q' to cancel, blank to skip): " opht
+  [[ "$opht" == "q" || "$opht" == "back" ]] && return
+  read -r -p "Closing Reminder [PHT] ('q' to cancel, blank to skip): " cpht
+  [[ "$cpht" == "q" || "$cpht" == "back" ]] && return
+  read -r -p "Follow-up Delay (minutes, default 20, 'q' to cancel): " follow
+  [[ "$follow" == "q" || "$follow" == "back" ]] && return
 
   [[ -z "$follow" ]] && follow=20
 
@@ -124,16 +134,22 @@ view_restaurants() {
 }
 
 update_restaurant() {
-  select_restaurant || { pause; return; }
+  select_restaurant || return
   id="$SELECTED_RESTAURANT"
 
-  echo "Updating $id. Leave blank to keep current value."
+  echo "Updating $id. Leave blank to keep current value, 'q' to cancel."
   read -r -p "New Name: " name
+  [[ "$name" == "q" || "$name" == "back" ]] && return
   read -r -p "New Branch: " branch
+  [[ "$branch" == "q" || "$branch" == "back" ]] && return
   read -r -p "New Manager Chat ID: " mid
+  [[ "$mid" == "q" || "$mid" == "back" ]] && return
   read -r -p "Opening Reminder [PHT]: " opht
+  [[ "$opht" == "q" || "$opht" == "back" ]] && return
   read -r -p "Closing Reminder [PHT]: " cpht
+  [[ "$cpht" == "q" || "$cpht" == "back" ]] && return
   read -r -p "Follow-up Delay [mins]: " follow
+  [[ "$follow" == "q" || "$follow" == "back" ]] && return
 
   [[ -n "$name" ]] && run_sql "UPDATE restaurants SET name='$name' WHERE restaurant_id='$id';"
   [[ -n "$branch" ]] && run_sql "UPDATE restaurants SET branch='$branch' WHERE restaurant_id='$id';"
@@ -154,7 +170,7 @@ update_restaurant() {
 }
 
 delete_restaurant() {
-  select_restaurant || { pause; return; }
+  select_restaurant || return
   id="$SELECTED_RESTAURANT"
 
   echo -e "${RED}WARNING: This will delete ALL data for $id (Staff, Managers, Steps, Sessions)${RESET}"
@@ -218,9 +234,9 @@ restaurant_menu() {
 # ---------------------------------------------------------------------------
 
 add_staff() {
-  select_restaurant || { pause; return; }
-  cid=$(input_required "Staff Chat ID: ")
-  name=$(input_required "Staff Name: ")
+  select_restaurant || return
+  cid=$(input_required "Staff Chat ID") || return
+  name=$(input_required "Staff Name") || return
   
   if confirm; then
     run_sql "INSERT INTO staff (chat_id, name, restaurant_id) VALUES ('$cid', '$name', '$SELECTED_RESTAURANT');"
@@ -230,10 +246,11 @@ add_staff() {
 }
 
 view_staff() {
-  echo "Filter by restaurant? (y/n)"
+  echo "Filter by restaurant? (y/n, 'q' to cancel)"
   read -r filter
+  [[ "$filter" == "q" || "$filter" == "back" ]] && return
   if [[ "$filter" == "y" ]]; then
-    select_restaurant || { pause; return; }
+    select_restaurant || return
     run_sql "SELECT chat_id, name FROM staff WHERE restaurant_id='$SELECTED_RESTAURANT';"
   else
     run_sql "SELECT chat_id, name, restaurant_id FROM staff ORDER BY restaurant_id;"
@@ -242,7 +259,7 @@ view_staff() {
 }
 
 delete_staff() {
-  cid=$(input_required "Chat ID to delete: ")
+  cid=$(input_required "Chat ID to delete") || return
   echo -e "${YELLOW}Delete staff $cid and all related history?${RESET}"
 
   if confirm; then
@@ -288,9 +305,9 @@ staff_menu() {
 # ---------------------------------------------------------------------------
 
 add_manager_op() {
-  select_restaurant || { pause; return; }
-  cid=$(input_required "Manager Chat ID: ")
-  name=$(input_required "Manager Name: ")
+  select_restaurant || return
+  cid=$(input_required "Manager Chat ID") || return
+  name=$(input_required "Manager Name") || return
   
   if confirm; then
     run_sql "INSERT INTO managers (chat_id, name, restaurant_id) VALUES ('$cid', '$name', '$SELECTED_RESTAURANT');"
@@ -300,10 +317,11 @@ add_manager_op() {
 }
 
 view_managers_op() {
-  echo "Filter by restaurant? (y/n)"
+  echo "Filter by restaurant? (y/n, 'q' to cancel)"
   read -r filter
+  [[ "$filter" == "q" || "$filter" == "back" ]] && return
   if [[ "$filter" == "y" ]]; then
-    select_restaurant || { pause; return; }
+    select_restaurant || return
     run_sql "SELECT chat_id, name FROM managers WHERE restaurant_id='$SELECTED_RESTAURANT';"
   else
     run_sql "SELECT chat_id, name, restaurant_id FROM managers ORDER BY restaurant_id;"
@@ -312,7 +330,7 @@ view_managers_op() {
 }
 
 delete_manager_op() {
-  cid=$(input_required "Chat ID to delete: ")
+  cid=$(input_required "Chat ID to delete") || return
   if confirm; then
     run_sql "DELETE FROM managers WHERE chat_id='$cid';"
     echo -e "${GREEN}Deleted.${RESET}"
@@ -345,7 +363,7 @@ manager_menu() {
 # ---------------------------------------------------------------------------
 
 _select_checklist_type() {
-  echo "Select Checklist Type:"
+  echo "Select Checklist Type (or 'q' to cancel):"
   echo "1. Kitchen Opening"
   echo "2. Kitchen Closing"
   echo "3. Dining Opening"
@@ -356,6 +374,7 @@ _select_checklist_type() {
     2) clid="KITCHEN_CLOSE" ;;
     3) clid="DINING_OPEN" ;;
     4) clid="DINING_CLOSE" ;;
+    q|back) return 1 ;;
     *) echo "Invalid"; return 1 ;;
   esac
   export SELECTED_CHECKLIST_ID="$clid"
@@ -363,13 +382,14 @@ _select_checklist_type() {
 }
 
 add_checklist_step() {
-  select_restaurant || { pause; return; }
-  _select_checklist_type || { pause; return; }
+  select_restaurant || return
+  _select_checklist_type || return
   clid="$SELECTED_CHECKLIST_ID"
 
-  num=$(input_required "Step Number: ")
-  inst=$(input_required "Instruction: ")
-  read -r -p "Requires Photo? (y/n): " photo
+  num=$(input_required "Step Number") || return
+  inst=$(input_required "Instruction") || return
+  read -r -p "Requires Photo? (y/n, 'q' to cancel): " photo
+  [[ "$photo" == "q" || "$photo" == "back" ]] && return
   [[ "$photo" == "y" ]] && photo="true" || photo="false"
 
   run_sql "INSERT INTO checklist_steps (restaurant_id, checklist_id, step_number, instruction, requires_photo)
@@ -379,17 +399,17 @@ add_checklist_step() {
 }
 
 view_checklist_steps() {
-  select_restaurant || { pause; return; }
+  select_restaurant || return
   run_sql "SELECT checklist_id, step_number, instruction, requires_photo FROM checklist_steps WHERE restaurant_id='$SELECTED_RESTAURANT' ORDER BY checklist_id, step_number;"
   pause
 }
 
 update_checklist_step() {
-  select_restaurant || { pause; return; }
-  _select_checklist_type || { pause; return; }
+  select_restaurant || return
+  _select_checklist_type || return
   clid="$SELECTED_CHECKLIST_ID"
 
-  num=$(input_required "Step Number to update: ")
+  num=$(input_required "Step Number to update") || return
   
   # Verify step exists
   exists=$(query_sql "SELECT id FROM checklist_steps WHERE restaurant_id='$SELECTED_RESTAURANT' AND checklist_id='$clid' AND step_number=$num;")
@@ -399,9 +419,11 @@ update_checklist_step() {
     return
   fi
 
-  echo "Updating Step $num. Leave blank to keep current value."
+  echo "Updating Step $num. Leave blank to keep current value, 'q' to cancel."
   read -r -p "New Instruction: " inst
+  [[ "$inst" == "q" || "$inst" == "back" ]] && return
   read -r -p "Change Requires Photo? (y/n/skip): " photo
+  [[ "$photo" == "q" || "$photo" == "back" ]] && return
 
   [[ -n "$inst" ]] && run_sql "UPDATE checklist_steps SET instruction='$inst' WHERE restaurant_id='$SELECTED_RESTAURANT' AND checklist_id='$clid' AND step_number=$num;"
   
@@ -416,11 +438,11 @@ update_checklist_step() {
 }
 
 delete_checklist_step() {
-  select_restaurant || { pause; return; }
-  _select_checklist_type || { pause; return; }
+  select_restaurant || return
+  _select_checklist_type || return
   clid="$SELECTED_CHECKLIST_ID"
 
-  num=$(input_required "Step Number to delete: ")
+  num=$(input_required "Step Number to delete") || return
   
   echo -e "${YELLOW}Delete step $num from $clid?${RESET}"
   if confirm; then

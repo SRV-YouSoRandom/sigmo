@@ -84,9 +84,11 @@ select_restaurant() {
 
 convert_pht_to_utc() {
   local pht_time="$1"
-  # PHP/PHT is UTC+8. We use TZ=Asia/Manila to ensure standard conversion.
-  # Note: 'date' behavior varies; this is for standard Linux date (GNU).
-  TZ=Asia/Manila date -d "$pht_time" +"%H:%M" -u 2>/dev/null
+  local h m total_h
+  IFS=':' read -r h m <<< "$pht_time"
+  # PHT is UTC+8, so subtract 8 hours (wrap around midnight)
+  total_h=$(( (10#$h - 8 + 24) % 24 ))
+  printf "%02d:%02d" "$total_h" "$((10#$m))"
 }
 
 # ---------------------------------------------------------------------------

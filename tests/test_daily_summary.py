@@ -176,11 +176,11 @@ def _make_issue(issue_type: str, resolved: bool = False) -> dict:
 
 def test_build_summary_completed_run():
     msg = build_summary_message([_make_run("KITCHEN_OPEN")], date_str="2026-01-01")
-    assert "Sigmo Daily Report" in msg
+    assert "SIGMO DAILY REPORT" in msg
     assert "Kitchen Opening" in msg
     assert "John" in msg
     assert "14m 0s" in msg
-    assert "Completion rate: 1/1" in msg
+    assert "Completion:  1/1 checklists done" in msg
 
 
 def test_build_summary_shows_photo_count():
@@ -193,7 +193,7 @@ def test_build_summary_abandoned_run():
     msg = build_summary_message([_make_run("KITCHEN_OPEN", status="abandoned")], date_str="2026-01-01")
     assert "Abandoned" in msg
     assert "cancelled" in msg
-    assert "Completion rate: 0/1" in msg
+    assert "Completion:  0/1 checklists done" in msg
 
 
 def test_build_summary_missed_checklists():
@@ -223,7 +223,7 @@ def test_build_summary_critical_issue():
         date_str="2026-01-01",
     )
     assert "Critical" in msg
-    assert "unresolved" in msg
+    assert "UNRESOLVED" in msg
     assert "Broken switch" in msg
 
 
@@ -243,13 +243,13 @@ def test_build_summary_totals_with_issues():
         issues=[_make_issue("operational")],
         date_str="2026-01-01",
     )
-    assert "Issues: 1" in msg
-    assert "unresolved" in msg
+    assert "Issues:      1 reported" in msg
+    assert "still open" in msg
 
 
 def test_build_summary_empty():
     msg = build_summary_message([], date_str="2026-01-01")
-    assert "Sigmo Daily Report" in msg
+    assert "SIGMO DAILY REPORT" in msg
     assert "No activity" in msg
 
 

@@ -1,6 +1,6 @@
 """Manager-facing service – staff status, issue reports, and resume checklist."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.core.config import to_pht
 
@@ -21,13 +21,17 @@ async def get_manager_by_chat_id(db: AsyncSession, chat_id: str) -> Manager | No
 
 
 async def get_today_staff_status(db: AsyncSession, restaurant_id: str) -> str:
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    # "Today" is defined in PHT (UTC+8). Midnight PHT = 16:00 UTC the previous day.
+    # Subtracting 8 hours from UTC midnight gives us the correct PHT day boundary,
+    # so a run at 06:52 AM PHT (22:52 UTC prev day) is correctly included.
+    now_utc = datetime.utcnow()
+    today_start_pht = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=8)
 
     runs_result = await db.execute(
         select(ChecklistRun)
         .where(
             ChecklistRun.restaurant_id == restaurant_id,
-            ChecklistRun.end_time >= today_start,
+            ChecklistRun.end_time >= today_start_pht,
         )
         .order_by(ChecklistRun.start_time)
     )
@@ -51,7 +55,7 @@ async def get_today_staff_status(db: AsyncSession, restaurant_id: str) -> str:
     )
     paused_sessions = paused_result.scalars().all()
 
-    lines = [f"👥 <b>Staff Status – {to_pht(datetime.utcnow()).strftime('%b %d, %Y')}</b>\n"]
+    lines = [f"👥 <b>Staff Status – {to_pht(now_utc).strftime('%b %d, %Y')}</b>\n"]
 
     if paused_sessions:
         lines.append("🔴 <b>Paused (Critical Issue)</b>")
@@ -69,7 +73,7 @@ async def get_today_staff_status(db: AsyncSession, restaurant_id: str) -> str:
             staff_res = await db.execute(select(Staff).where(Staff.chat_id == s.chat_id))
             staff = staff_res.scalars().first()
             label = CHECKLIST_LABELS.get(s.checklist_id, s.checklist_id)
-            elapsed = int((datetime.utcnow() - s.started_at).total_seconds() // 60)
+            elapsed = int((now_utc - s.started_at).total_seconds() // 60)
             name = staff.name if staff else s.chat_id
             lines.append(f"  • {name} – {label} (step {s.current_step}, {elapsed}m elapsed)")
         lines.append("")

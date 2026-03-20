@@ -56,7 +56,10 @@ async def _send_daily_summary() -> None:
         restaurants = result.scalars().all()
         for restaurant in restaurants:
             runs = await get_runs_for_yesterday(db, restaurant.restaurant_id)
-            msg = build_summary_message(runs, restaurant=restaurant)
+            # Pull issues for yesterday as well
+            from app.services.report_service import get_issues_for_yesterday
+            issues = await get_issues_for_yesterday(db, restaurant.restaurant_id)
+            msg = build_summary_message(runs, issues=issues, restaurant=restaurant)
             await send_telegram_message(restaurant.manager_chat_id, msg)
             logger.info("Sent daily summary to restaurant %s", restaurant.restaurant_id)
 
@@ -75,7 +78,7 @@ async def schedule_restaurant_reminders() -> None:
     _add_or_replace_job(
         "daily_summary",
         _send_daily_summary,
-        hour=8,
+        hour=0,
         minute=0,
         kwargs={},
     )

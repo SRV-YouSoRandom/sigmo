@@ -7,6 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.commands import parse_command
 from app.core.config import to_pht
+from app.metrics.prometheus import (
+    active_sessions,
+    checklist_abandoned,
+    checklist_completed,
+    checklist_duration,
+    checklist_started,
+    issues_reported,
+    photos_submitted,
+)
 from app.models.checklist_run import ChecklistRun
 from app.models.checklist_step import ChecklistStep
 from app.models.issue_report import IssueReport
@@ -31,7 +40,6 @@ CHECKLIST_LABELS: dict[str, str] = {
     "DINING_CLOSE": "Dining Closing",
 }
 
-# Which checklist types count as "opening" for reminder follow-up checks
 OPENING_CHECKLISTS = {"KITCHEN_OPEN", "DINING_OPEN"}
 CLOSING_CHECKLISTS = {"KITCHEN_CLOSE", "DINING_CLOSE"}
 
@@ -84,7 +92,6 @@ async def _get_restaurant(db: AsyncSession, restaurant_id: str):
 
 
 def _branch_label(restaurant) -> str:
-    """Return 'Name – Branch' if branch is set, else just 'Name'."""
     if restaurant and restaurant.branch:
         return f"{restaurant.name} – {restaurant.branch}"
     return restaurant.name if restaurant else ""
@@ -108,7 +115,6 @@ async def start_checklist(db: AsyncSession, chat_id: str, text: str) -> dict:
     if staff is None:
         return _reply("You are not registered in the system. Please contact your manager.")
 
-    # Block if already active OR paused
     existing = await get_active_or_paused_session(db, chat_id)
     if existing:
         label = CHECKLIST_LABELS.get(existing.checklist_id, existing.checklist_id)
@@ -134,6 +140,13 @@ async def start_checklist(db: AsyncSession, chat_id: str, text: str) -> dict:
     now = to_pht(datetime.utcnow()).strftime("%I:%M %p")
     branch = _branch_label(restaurant)
 
+    # Metrics
+    checklist_started.labels(
+        restaurant_id=staff.restaurant_id,
+        checklist_id=checklist_id,
+    ).inc()
+    active_sessions.labels(restaurant_id=staff.restaurant_id).inc()
+
     return {
         "reply": f"Starting <b>{label}</b> checklist.\n\n{_format_step_message(step, total_steps)}",
         "use_buttons": True,
@@ -151,7 +164,6 @@ async def progress_step(
 ) -> dict:
     session = await get_active_session(db, chat_id)
     if session is None:
-        # Could be paused
         paused = await get_active_or_paused_session(db, chat_id)
         if paused and paused.status == "paused":
             label = CHECKLIST_LABELS.get(paused.checklist_id, paused.checklist_id)
@@ -191,6 +203,9 @@ async def progress_step(
         )
         photo_file_id_for_manager = file_id
 
+        # Metrics
+        photos_submitted.labels(restaurant_id=session.restaurant_id).inc()
+
     next_step_num = session.current_step + 1
     if next_step_num > total_steps:
         return await _complete_checklist(
@@ -227,26 +242,38 @@ async def _complete_checklist(
     await complete_session(db, session)
 
     photo_count = await _count_photos(db, session.id)
+    end_time = datetime.utcnow()
     db.add(ChecklistRun(
         chat_id=session.chat_id,
         restaurant_id=session.restaurant_id,
         checklist_id=session.checklist_id,
         start_time=session.started_at,
-        end_time=datetime.utcnow(),
+        end_time=end_time,
         status="completed",
         photo_count=photo_count,
     ))
     await db.commit()
 
-    duration = datetime.utcnow() - session.started_at
-    minutes = int(duration.total_seconds() // 60)
+    duration_seconds = (end_time - session.started_at).total_seconds()
+    minutes = int(duration_seconds // 60)
     label = CHECKLIST_LABELS.get(session.checklist_id, session.checklist_id)
 
     staff = await _get_staff(db, session.chat_id)
     restaurant = await _get_restaurant(db, session.restaurant_id)
     branch = _branch_label(restaurant)
     start_str = to_pht(session.started_at).strftime("%I:%M %p")
-    end_str = to_pht(datetime.utcnow()).strftime("%I:%M %p")
+    end_str = to_pht(end_time).strftime("%I:%M %p")
+
+    # Metrics
+    checklist_completed.labels(
+        restaurant_id=session.restaurant_id,
+        checklist_id=session.checklist_id,
+    ).inc()
+    checklist_duration.labels(
+        restaurant_id=session.restaurant_id,
+        checklist_id=session.checklist_id,
+    ).observe(duration_seconds)
+    active_sessions.labels(restaurant_id=session.restaurant_id).dec()
 
     manager_msg = (
         f"✅ <b>{staff.name}</b> completed <b>{label}</b>\n"
@@ -294,6 +321,13 @@ async def handle_abandon(db: AsyncSession, chat_id: str) -> dict:
     label = CHECKLIST_LABELS.get(session.checklist_id, session.checklist_id)
     restaurant = await _get_restaurant(db, session.restaurant_id)
 
+    # Metrics
+    checklist_abandoned.labels(
+        restaurant_id=session.restaurant_id,
+        checklist_id=session.checklist_id,
+    ).inc()
+    active_sessions.labels(restaurant_id=session.restaurant_id).dec()
+
     return {
         "reply": f"❌ <b>{label}</b> checklist cancelled.",
         "use_buttons": False,
@@ -312,11 +346,6 @@ async def handle_abandon(db: AsyncSession, chat_id: str) -> dict:
 async def handle_issue_report(
     db: AsyncSession, chat_id: str, description: str, issue_type: str = "operational"
 ) -> dict:
-    """
-    Log an issue for the current step.
-    - operational: auto-advances to next step
-    - critical: pauses the checklist, manager must resume
-    """
     session = await get_active_session(db, chat_id)
     if session is None:
         return {**_reply("No active checklist. Start a checklist first."), "delete_message_id": None, "photo_to_manager": None}
@@ -342,8 +371,15 @@ async def handle_issue_report(
     branch = _branch_label(restaurant)
     manager_chat_id = restaurant.manager_chat_id if restaurant else None
 
+    # Metrics
+    issues_reported.labels(
+        restaurant_id=session.restaurant_id,
+        issue_type=issue_type,
+    ).inc()
+
     if issue_type == "critical":
         await pause_session(db, session)
+        active_sessions.labels(restaurant_id=session.restaurant_id).dec()
 
         manager_msg = (
             f"🔴 <b>CRITICAL Issue #{issue.id}</b>\n"
@@ -369,7 +405,6 @@ async def handle_issue_report(
             "issue_id": issue.id,
         }
 
-    # Operational: auto-advance to next step
     total_steps = await _count_steps(db, session.restaurant_id, session.checklist_id)
     next_step_num = session.current_step + 1
 
@@ -381,7 +416,6 @@ async def handle_issue_report(
         f"📝 {description}"
     )
 
-    # Last step — complete the checklist
     if next_step_num > total_steps:
         return await _complete_checklist(db, session, total_steps, session.last_message_id, None, None)
 
@@ -405,13 +439,15 @@ async def handle_issue_report(
 
 
 async def resume_checklist_for_staff(db: AsyncSession, chat_id: str) -> dict:
-    """Called by manager service after resolving a critical issue — resumes the session."""
     from app.services.session_service import get_paused_session
     session = await get_paused_session(db, chat_id)
     if session is None:
         return _reply("No paused checklist found for this staff member.")
 
     await resume_session(db, session)
+
+    # Metrics — session is active again
+    active_sessions.labels(restaurant_id=session.restaurant_id).inc()
 
     total_steps = await _count_steps(db, session.restaurant_id, session.checklist_id)
     current_step = await _get_step(db, session.restaurant_id, session.checklist_id, session.current_step)

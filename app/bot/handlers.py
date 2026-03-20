@@ -290,11 +290,8 @@ async def _handle_command(db: AsyncSession, chat_id: str, text: str) -> None:
             await send_telegram_message(chat_id, result["reply"], reply_markup=CHECKLIST_KEYBOARD)
     if result["manager_msg"]:
         await notify_manager(result["manager_chat_id"], result["manager_msg"])
-        if result["session"] and result["session"].status == "active":
-            checklist_started.labels(
-                restaurant_id=result["session"].restaurant_id,
-                checklist_id=result["session"].checklist_id,
-            ).inc()
+        # NOTE: checklist_started metric is now incremented inside start_checklist()
+        # in checklist_engine.py — do not increment it here as well
 
 
 async def _handle_done(

@@ -1,6 +1,6 @@
 """Core checklist engine – start, progress, complete, abandon, and issue reporting."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,6 +91,31 @@ async def _get_restaurant(db: AsyncSession, restaurant_id: str):
     return res.scalars().first()
 
 
+async def _has_completed_today(
+    db: AsyncSession, restaurant_id: str, checklist_id: str
+) -> bool:
+    """Return True if this checklist has already been completed today (PHT day).
+
+    Uses the same PHT-aligned boundary as get_today_staff_status:
+    midnight PHT = 16:00 UTC the previous calendar day.
+    Block is per-restaurant per-checklist — once any staff member completes
+    it, no one else can start it again until the next PHT day.
+    """
+    today_start_pht = (
+        datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        - timedelta(hours=8)
+    )
+    result = await db.execute(
+        select(ChecklistRun).where(
+            ChecklistRun.restaurant_id == restaurant_id,
+            ChecklistRun.checklist_id == checklist_id,
+            ChecklistRun.status == "completed",
+            ChecklistRun.end_time >= today_start_pht,
+        )
+    )
+    return result.scalars().first() is not None
+
+
 def _branch_label(restaurant) -> str:
     if restaurant and restaurant.branch:
         return f"{restaurant.name} – {restaurant.branch}"
@@ -115,6 +140,7 @@ async def start_checklist(db: AsyncSession, chat_id: str, text: str) -> dict:
     if staff is None:
         return _reply("You are not registered in the system. Please contact your manager.")
 
+    # Block if already active OR paused
     existing = await get_active_or_paused_session(db, chat_id)
     if existing:
         label = CHECKLIST_LABELS.get(existing.checklist_id, existing.checklist_id)
@@ -126,6 +152,14 @@ async def start_checklist(db: AsyncSession, chat_id: str, text: str) -> dict:
         return _reply(
             f"You already have an active checklist: <b>{label}</b>.\n"
             "Tap <b>✅ Done</b> to continue, or use /cancel to stop it."
+        )
+
+    # Block if this checklist has already been completed today for this restaurant
+    if await _has_completed_today(db, staff.restaurant_id, checklist_id):
+        label = CHECKLIST_LABELS.get(checklist_id, checklist_id)
+        return _reply(
+            f"✅ <b>{label}</b> has already been completed today.\n"
+            "It can only be done once per day per restaurant."
         )
 
     total_steps = await _count_steps(db, staff.restaurant_id, checklist_id)

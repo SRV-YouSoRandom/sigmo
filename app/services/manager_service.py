@@ -31,7 +31,7 @@ async def get_today_staff_status(db: AsyncSession, restaurant_id: str) -> str:
         select(ChecklistRun)
         .where(
             ChecklistRun.restaurant_id == restaurant_id,
-            ChecklistRun.end_time >= today_start_pht,
+            ChecklistRun.end_time >= today_start_utc,
         )
         .order_by(ChecklistRun.start_time)
     )

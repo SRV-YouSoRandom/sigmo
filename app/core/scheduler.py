@@ -78,7 +78,7 @@ async def schedule_restaurant_reminders() -> None:
     _add_or_replace_job(
         "daily_summary",
         _send_daily_summary,
-        hour=0,
+        hour=16,
         minute=0,
         kwargs={},
     )

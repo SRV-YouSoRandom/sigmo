@@ -12,7 +12,7 @@
       "title": "Checklists Started (24h)",
       "type": "stat",
       "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
-      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["sum"] } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -21,7 +21,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum(increase(sigmo_checklist_started_total[24h]))",
+        "expr": "sum(increase(sigmo_checklist_started_total[24h])) by ()",
         "legendFormat": "Started"
       }]
     },
@@ -30,7 +30,7 @@
       "title": "Checklists Completed (24h)",
       "type": "stat",
       "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
-      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["sum"] } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -39,7 +39,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum(increase(sigmo_checklist_completed_total[24h]))",
+        "expr": "sum(increase(sigmo_checklist_completed_total[24h])) by ()",
         "legendFormat": "Completed"
       }]
     },
@@ -48,7 +48,7 @@
       "title": "Checklists Abandoned (24h)",
       "type": "stat",
       "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
-      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["sum"] } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -57,7 +57,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum(increase(sigmo_checklist_abandoned_total[24h]))",
+        "expr": "sum(increase(sigmo_checklist_abandoned_total[24h])) by ()",
         "legendFormat": "Abandoned"
       }]
     },
@@ -70,22 +70,40 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "thresholds": { "steps": [{ "color": "yellow", "value": null }] }
+          "thresholds": {
+            "steps": [
+              { "color": "yellow", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
         }
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum(sigmo_active_sessions)",
+        "expr": "clamp_min(sum(sigmo_active_sessions) by (), 0)",
         "legendFormat": "Active"
       }]
     },
+
     {
       "id": 5,
-      "title": "Checklists Started per Restaurant (24h)",
+      "title": "Checklists Started Today — by Restaurant",
+      "description": "Number of checklists started per restaurant in the last 24h",
       "type": "barchart",
       "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
-      "options": { "xTickLabelRotation": 0, "legend": { "displayMode": "list", "placement": "bottom" } },
-      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
+      "options": {
+        "xTickLabelRotation": 0,
+        "barWidth": 0.6,
+        "groupWidth": 0.7,
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 80 }
+        }
+      },
       "targets": [{
         "datasource": "Prometheus",
         "expr": "sum by (restaurant_id) (increase(sigmo_checklist_started_total[24h]))",
@@ -94,16 +112,29 @@
     },
     {
       "id": 6,
-      "title": "Completion Rate per Restaurant (24h)",
-      "type": "barchart",
+      "title": "Completion Rate — by Restaurant (24h)",
+      "description": "Percentage of started checklists that were completed",
+      "type": "bargauge",
       "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
-      "options": { "xTickLabelRotation": 0, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient",
+        "showUnfilled": true
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
           "min": 0,
           "max": 1,
-          "color": { "mode": "palette-classic" }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 0.8 }
+            ]
+          }
         }
       },
       "targets": [{
@@ -112,13 +143,26 @@
         "legendFormat": "{{restaurant_id}}"
       }]
     },
+
     {
       "id": 7,
-      "title": "Checklists Over Time",
-      "type": "timeseries",
-      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
-      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
+      "title": "Checklist Activity Over Time — Started vs Completed (per hour)",
+      "description": "Bar chart showing how many checklists were started and completed each hour",
+      "type": "barchart",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 9 },
+      "options": {
+        "xTickLabelRotation": -30,
+        "barWidth": 0.5,
+        "groupWidth": 0.7,
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 80 }
+        }
+      },
       "targets": [
         {
           "datasource": "Prometheus",
@@ -132,53 +176,89 @@
         }
       ]
     },
+
     {
       "id": 8,
-      "title": "Average Checklist Duration (minutes)",
-      "type": "barchart",
-      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "title": "Avg Checklist Duration — by Type (minutes, 24h)",
+      "description": "Average time to complete each checklist type",
+      "type": "bargauge",
+      "gridPos": { "x": 0, "y": 21, "w": 12, "h": 7 },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient",
+        "showUnfilled": true
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "m",
-          "color": { "mode": "palette-classic" }
-        }
-      },
-      "targets": [{
-        "datasource": "Prometheus",
-        "expr": "sum by (restaurant_id, checklist_id) (rate(sigmo_checklist_duration_seconds_sum[24h])) / sum by (restaurant_id, checklist_id) (rate(sigmo_checklist_duration_seconds_count[24h])) / 60",
-        "legendFormat": "{{restaurant_id}} – {{checklist_id}}"
-      }]
-    },
-    {
-      "id": 9,
-      "title": "Issues Reported (24h)",
-      "type": "barchart",
-      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
+          "min": 0,
           "thresholds": {
+            "mode": "absolute",
             "steps": [
-              { "color": "yellow", "value": null },
-              { "color": "red", "value": 5 }
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 15 },
+              { "color": "red", "value": 30 }
             ]
           }
         }
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum by (restaurant_id, issue_type) (increase(sigmo_issues_reported_total[24h]))",
-        "legendFormat": "{{restaurant_id}} – {{issue_type}}"
+        "expr": "sum by (checklist_id) (rate(sigmo_checklist_duration_seconds_sum[24h])) / sum by (checklist_id) (rate(sigmo_checklist_duration_seconds_count[24h])) / 60",
+        "legendFormat": "{{checklist_id}}"
       }]
     },
+    {
+      "id": 9,
+      "title": "Issues Reported (24h)",
+      "description": "Critical issues are serious — Operational issues are minor",
+      "type": "barchart",
+      "gridPos": { "x": 12, "y": 21, "w": 12, "h": 7 },
+      "options": {
+        "xTickLabelRotation": 0,
+        "barWidth": 0.5,
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 80 }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byFrameRefID", "options": "critical" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byFrameRefID", "options": "operational" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "critical",
+          "datasource": "Prometheus",
+          "expr": "sum by (restaurant_id) (increase(sigmo_issues_reported_total{issue_type=\"critical\"}[24h]))",
+          "legendFormat": "🔴 Critical – {{restaurant_id}}"
+        },
+        {
+          "refId": "operational",
+          "datasource": "Prometheus",
+          "expr": "sum by (restaurant_id) (increase(sigmo_issues_reported_total{issue_type=\"operational\"}[24h]))",
+          "legendFormat": "🟡 Operational – {{restaurant_id}}"
+        }
+      ]
+    },
+
     {
       "id": 10,
       "title": "Photos Submitted (24h)",
       "type": "stat",
       "gridPos": { "x": 0, "y": 28, "w": 8, "h": 4 },
-      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["sum"] } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -187,7 +267,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum(increase(sigmo_photos_submitted_total[24h]))",
+        "expr": "sum(increase(sigmo_photos_submitted_total[24h])) by ()",
         "legendFormat": "Photos"
       }]
     },
@@ -196,7 +276,7 @@
       "title": "Webhook Avg Response Time",
       "type": "stat",
       "gridPos": { "x": 8, "y": 28, "w": 8, "h": 4 },
-      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": {
         "defaults": {
           "unit": "ms",
@@ -221,7 +301,7 @@
       "title": "Webhook Request Rate",
       "type": "stat",
       "gridPos": { "x": 16, "y": 28, "w": 8, "h": 4 },
-      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",

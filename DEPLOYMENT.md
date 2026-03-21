@@ -172,6 +172,44 @@ docker compose -f docker-compose.prod.yml up -d --build
 # Then re-run steps 5 → 8
 ```
 
+---
+
+## Scheduler Operations
+
+Sigmo uses APScheduler with a PostgreSQL job store (`apscheduler_jobs` table). Jobs are persisted across container restarts, which means reminder schedules survive reboots automatically.
+
+### How job updates work
+
+There are two types of changes, and they are handled differently:
+
+**Reminder time or restaurant changes (via `manage.sh`)**
+No manual action needed. The admin tool calls the `/internal/refresh-schedules` endpoint automatically after any restaurant update, which re-registers all jobs with the new times.
+
+**Changes to scheduler logic in `app/core/scheduler.py`**
+APScheduler serializes job _functions_ using pickle. When you update the Python code and rebuild, the pickled function bodies already stored in the DB do **not** update automatically — only the cron schedule metadata does. This means the job will fire at the correct time but execute the old logic silently.
+
+After any code change to `app/core/scheduler.py`, you must clear the stale jobs and restart:
+
+```bash
+# 1. Delete all persisted jobs so APScheduler re-registers from current code
+docker compose -f docker-compose.prod.yml exec postgres psql -U sigmo -d sigmo \
+  -c "DELETE FROM apscheduler_jobs;"
+
+# 2. Restart the container
+docker compose -f docker-compose.prod.yml restart fastapi
+
+# 3. Confirm all jobs were re-registered
+docker compose -f docker-compose.prod.yml logs fastapi --tail=20
+```
+
+On startup you should see each job listed as `Added job "..." to job store "default"` followed by `Registered/refreshed jobs for N restaurant(s)`.
+
+### Symptoms of stale pickled jobs
+
+If a scheduled job fires (appears in logs as "executed successfully") but produces no Telegram message and no `Sending ... reminder/follow-up` log line, the job function body is likely stale. Run the three commands above to fix it.
+
+---
+
 ### Monitoring
 
 | Service    | URL                                | Access     |

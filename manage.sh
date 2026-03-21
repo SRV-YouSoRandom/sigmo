@@ -20,6 +20,16 @@ run_sql() {
   $COMPOSE exec -T postgres psql -U sigmo -d sigmo -c "$1"
 }
 
+refresh_scheduler() {
+  echo "Refreshing scheduler jobs..."
+  result=$($COMPOSE exec -T fastapi sh -c "curl -s -X POST http://localhost:8000/internal/refresh-schedules" 2>&1)
+  if echo "$result" | grep -q '"ok":true'; then
+    echo -e "${GREEN}Scheduler refreshed.${RESET}"
+  else
+    echo -e "${YELLOW}Warning: Could not refresh scheduler (bot may need restart). Result: $result${RESET}"
+  fi
+}
+
 # Returns data as: id|name|branch|...
 query_sql() {
   $COMPOSE exec -T postgres psql -U sigmo -d sigmo -At -c "$1"
@@ -125,6 +135,7 @@ add_restaurant() {
     run_sql "INSERT INTO restaurants (restaurant_id, name, branch, manager_chat_id, opening_reminder_time, closing_reminder_time, reminder_followup_minutes)
     VALUES ('$id', '$name', '${branch:-NULL}', '$manager_chat_id', $outc, $cutc, $follow);"
     echo -e "${GREEN}Restaurant created.${RESET}"
+    refresh_scheduler
   fi
   pause
 }
@@ -167,6 +178,7 @@ update_restaurant() {
     run_sql "UPDATE restaurants SET closing_reminder_time='$cutc' WHERE restaurant_id='$id';"
   fi
 
+  refresh_scheduler
   echo -e "${GREEN}Update complete.${RESET}"
   pause
 }
@@ -205,6 +217,7 @@ delete_restaurant() {
     run_sql "DELETE FROM restaurants WHERE restaurant_id='$id';"
     
     echo -e "${GREEN}Restaurant and all related data deleted.${RESET}"
+    refresh_scheduler
   fi
   pause
 }

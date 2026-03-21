@@ -61,3 +61,20 @@ async def health() -> dict:
 @app.get("/metrics")
 async def metrics() -> Response:
     return Response(content=generate_latest(), media_type="text/plain; charset=utf-8")
+
+
+@app.post("/internal/refresh-schedules")
+async def refresh_schedules(request: Request) -> dict:
+    """Reload all scheduler jobs from the DB without restarting.
+    Only accessible from localhost — called by manage.sh after restaurant changes."""
+    client_host = request.client.host
+    if client_host not in ("127.0.0.1", "::1"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        await schedule_restaurant_reminders()
+        return {"ok": True}
+    except Exception as exc:
+        logger.error("Failed to refresh schedules: %s", exc)
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(exc))

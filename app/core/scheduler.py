@@ -266,7 +266,10 @@ async def _get_restaurant_and_staff(db, restaurant_id: str):
 
 
 async def _any_checklist_started_today(db, restaurant_id: str, checklist_types: set) -> bool:
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    # Use the PHT-aligned day boundary (same as manager_service and report_service)
+    # instead of raw UTC midnight, which was causing follow-ups to silently skip.
+    from app.core.config import pht_today_start_utc
+    today_start = pht_today_start_utc()
     result = await db.execute(
         select(Session).where(
             Session.restaurant_id == restaurant_id,

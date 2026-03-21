@@ -12,7 +12,7 @@
       "title": "Checklists Started (24h)",
       "type": "stat",
       "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -21,7 +21,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum(increase(sigmo_checklist_started_total[24h])) by ()",
+        "expr": "round(sum(rate(sigmo_checklist_started_total[24h])) * 86400)",
         "legendFormat": "Started"
       }]
     },
@@ -30,7 +30,7 @@
       "title": "Checklists Completed (24h)",
       "type": "stat",
       "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -39,7 +39,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum(increase(sigmo_checklist_completed_total[24h])) by ()",
+        "expr": "round(sum(rate(sigmo_checklist_completed_total[24h])) * 86400)",
         "legendFormat": "Completed"
       }]
     },
@@ -48,7 +48,7 @@
       "title": "Checklists Abandoned (24h)",
       "type": "stat",
       "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -57,7 +57,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum(increase(sigmo_checklist_abandoned_total[24h])) by ()",
+        "expr": "round(sum(rate(sigmo_checklist_abandoned_total[24h])) * 86400)",
         "legendFormat": "Abandoned"
       }]
     },
@@ -106,7 +106,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum by (restaurant_id) (increase(sigmo_checklist_started_total[24h]))",
+        "expr": "round(sum by (restaurant_id) (rate(sigmo_checklist_started_total[24h])) * 86400)",
         "legendFormat": "{{restaurant_id}}"
       }]
     },
@@ -139,7 +139,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum by (restaurant_id) (increase(sigmo_checklist_completed_total[24h])) / sum by (restaurant_id) (increase(sigmo_checklist_started_total[24h]))",
+        "expr": "sum by (restaurant_id) (rate(sigmo_checklist_completed_total[24h])) / sum by (restaurant_id) (rate(sigmo_checklist_started_total[24h]))",
         "legendFormat": "{{restaurant_id}}"
       }]
     },
@@ -267,7 +267,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "sum(increase(sigmo_photos_submitted_total[24h])) by ()",
+        "expr": "round(sum(rate(sigmo_photos_submitted_total[24h])) * 86400)",
         "legendFormat": "Photos"
       }]
     },

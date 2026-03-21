@@ -70,3 +70,10 @@ def to_pht(dt) -> "datetime":
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(PHT)
+
+
+def pht_today_start_utc() -> datetime:
+    """Return the start of today (PHT) as a naive UTC datetime for DB queries."""
+    now_pht = to_pht(datetime.utcnow())
+    return now_pht.replace(hour=0, minute=0, second=0, microsecond=0)\
+                  .astimezone(timezone.utc).replace(tzinfo=None)

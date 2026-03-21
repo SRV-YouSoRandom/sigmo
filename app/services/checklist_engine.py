@@ -1,12 +1,12 @@
 """Core checklist engine – start, progress, complete, abandon, and issue reporting."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.commands import parse_command
-from app.core.config import to_pht
+from app.core.config import to_pht, pht_today_start_utc
 from app.metrics.prometheus import (
     active_sessions,
     checklist_abandoned,
@@ -101,16 +101,13 @@ async def _has_completed_today(
     Block is per-restaurant per-checklist — once any staff member completes
     it, no one else can start it again until the next PHT day.
     """
-    today_start_pht = (
-        datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        - timedelta(hours=8)
-    )
+    today_start_utc = pht_today_start_utc()
     result = await db.execute(
         select(ChecklistRun).where(
             ChecklistRun.restaurant_id == restaurant_id,
             ChecklistRun.checklist_id == checklist_id,
             ChecklistRun.status == "completed",
-            ChecklistRun.end_time >= today_start_pht,
+            ChecklistRun.end_time >= today_start_utc,
         )
     )
     return result.scalars().first() is not None

@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import to_pht
+from app.core.config import to_pht, pht_today_start_utc
 from app.models.checklist_run import ChecklistRun
 from app.models.issue_report import IssueReport
 from app.models.staff import Staff
@@ -25,10 +25,7 @@ def _pht_day_window() -> tuple[datetime, datetime]:
     Previously the window was midnight-to-midnight UTC (= 08:00-08:00 PHT),
     which silently missed late-night closing runs before 08:00 PHT.
     """
-    now_utc = datetime.utcnow()
-    # Start of today in PHT  = 16:00 UTC yesterday
-    today_pht_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=8)
-    # Start of yesterday PHT = 16:00 UTC two days ago
+    today_pht_start_utc = pht_today_start_utc()
     yesterday_pht_start_utc = today_pht_start_utc - timedelta(days=1)
     return yesterday_pht_start_utc, today_pht_start_utc
 

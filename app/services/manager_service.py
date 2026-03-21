@@ -1,8 +1,8 @@
 """Manager-facing service – staff status, issue reports, and resume checklist."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from app.core.config import to_pht
+from app.core.config import to_pht, pht_today_start_utc
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +25,7 @@ async def get_today_staff_status(db: AsyncSession, restaurant_id: str) -> str:
     # Subtracting 8 hours from UTC midnight gives us the correct PHT day boundary,
     # so a run at 06:52 AM PHT (22:52 UTC prev day) is correctly included.
     now_utc = datetime.utcnow()
-    today_start_pht = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=8)
+    today_start_utc = pht_today_start_utc()
 
     runs_result = await db.execute(
         select(ChecklistRun)

@@ -22,11 +22,19 @@ run_sql() {
 
 refresh_scheduler() {
   echo "Refreshing scheduler jobs..."
-  result=$($COMPOSE exec -T fastapi sh -c "curl -s -X POST http://localhost:8000/internal/refresh-schedules" 2>&1)
+  result=$($COMPOSE exec -T fastapi python -c "
+import urllib.request, json
+try:
+    req = urllib.request.Request('http://localhost:8000/internal/refresh-schedules', method='POST')
+    res = urllib.request.urlopen(req, timeout=5)
+    print(res.read().decode())
+except Exception as e:
+    print('error: ' + str(e))
+" 2>&1)
   if echo "$result" | grep -q '"ok":true'; then
     echo -e "${GREEN}Scheduler refreshed.${RESET}"
   else
-    echo -e "${YELLOW}Warning: Could not refresh scheduler (bot may need restart). Result: $result${RESET}"
+    echo -e "${YELLOW}Warning: Could not refresh scheduler. Result: $result${RESET}"
   fi
 }
 

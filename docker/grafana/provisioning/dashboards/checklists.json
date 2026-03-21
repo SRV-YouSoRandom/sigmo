@@ -7,6 +7,7 @@
   "refresh": "1m",
   "time": { "from": "now-24h", "to": "now" },
   "panels": [
+
     {
       "id": 1,
       "title": "Checklists Started (24h)",
@@ -25,6 +26,7 @@
         "legendFormat": "Started"
       }]
     },
+
     {
       "id": 2,
       "title": "Checklists Completed (24h)",
@@ -43,6 +45,7 @@
         "legendFormat": "Completed"
       }]
     },
+
     {
       "id": 3,
       "title": "Checklists Abandoned (24h)",
@@ -61,6 +64,7 @@
         "legendFormat": "Abandoned"
       }]
     },
+
     {
       "id": 4,
       "title": "Active Sessions Right Now",
@@ -80,7 +84,7 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "clamp_min(sum(sigmo_active_sessions) by (), 0)",
+        "expr": "clamp_min(sum(sigmo_active_sessions), 0)",
         "legendFormat": "Active"
       }]
     },
@@ -88,20 +92,24 @@
     {
       "id": 5,
       "title": "Checklists Started Today — by Restaurant",
-      "description": "Number of checklists started per restaurant in the last 24h",
-      "type": "barchart",
-      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "description": "Approximate count of checklists started per restaurant in the last 24h",
+      "type": "bargauge",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 7 },
       "options": {
-        "xTickLabelRotation": 0,
-        "barWidth": 0.6,
-        "groupWidth": 0.7,
-        "legend": { "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "text": {}
       },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
-          "custom": { "fillOpacity": 80 }
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
         }
       },
       "targets": [{
@@ -110,12 +118,13 @@
         "legendFormat": "{{restaurant_id}}"
       }]
     },
+
     {
       "id": 6,
       "title": "Completion Rate — by Restaurant (24h)",
       "description": "Percentage of started checklists that were completed",
       "type": "bargauge",
-      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 7 },
       "options": {
         "orientation": "horizontal",
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -147,32 +156,39 @@
     {
       "id": 7,
       "title": "Checklist Activity Over Time — Started vs Completed (per hour)",
-      "description": "Bar chart showing how many checklists were started and completed each hour",
-      "type": "barchart",
-      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 9 },
+      "description": "How many checklists were started and completed over time",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 11, "w": 24, "h": 9 },
       "options": {
-        "xTickLabelRotation": -30,
-        "barWidth": 0.5,
-        "groupWidth": 0.7,
         "legend": { "displayMode": "list", "placement": "bottom" },
         "tooltip": { "mode": "multi" }
       },
       "fieldConfig": {
         "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "spanNulls": false
+          },
           "color": { "mode": "palette-classic" },
-          "custom": { "fillOpacity": 80 }
+          "min": 0
         }
       },
       "targets": [
         {
           "datasource": "Prometheus",
-          "expr": "sum by (restaurant_id) (increase(sigmo_checklist_started_total[1h]))",
-          "legendFormat": "Started – {{restaurant_id}}"
+          "expr": "round(sum by (restaurant_id) (increase(sigmo_checklist_started_total[1h])))",
+          "legendFormat": "Started – {{restaurant_id}}",
+          "interval": "1h"
         },
         {
           "datasource": "Prometheus",
-          "expr": "sum by (restaurant_id) (increase(sigmo_checklist_completed_total[1h]))",
-          "legendFormat": "Completed – {{restaurant_id}}"
+          "expr": "round(sum by (restaurant_id) (increase(sigmo_checklist_completed_total[1h])))",
+          "legendFormat": "Completed – {{restaurant_id}}",
+          "interval": "1h"
         }
       ]
     },
@@ -182,7 +198,7 @@
       "title": "Avg Checklist Duration — by Type (minutes, 24h)",
       "description": "Average time to complete each checklist type",
       "type": "bargauge",
-      "gridPos": { "x": 0, "y": 21, "w": 12, "h": 7 },
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 7 },
       "options": {
         "orientation": "horizontal",
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -209,45 +225,42 @@
         "legendFormat": "{{checklist_id}}"
       }]
     },
+
     {
       "id": 9,
       "title": "Issues Reported (24h)",
-      "description": "Critical issues are serious — Operational issues are minor",
-      "type": "barchart",
-      "gridPos": { "x": 12, "y": 21, "w": 12, "h": 7 },
+      "description": "Critical vs Operational issues per restaurant",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 7 },
       "options": {
-        "xTickLabelRotation": 0,
-        "barWidth": 0.5,
-        "legend": { "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "horizontal",
+        "textMode": "auto"
       },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "fillOpacity": 80 }
-        },
-        "overrides": [
-          {
-            "matcher": { "id": "byFrameRefID", "options": "critical" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
-          },
-          {
-            "matcher": { "id": "byFrameRefID", "options": "operational" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }]
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
           }
-        ]
+        }
       },
       "targets": [
         {
-          "refId": "critical",
           "datasource": "Prometheus",
-          "expr": "sum by (restaurant_id) (increase(sigmo_issues_reported_total{issue_type=\"critical\"}[24h]))",
+          "expr": "round(sum by (restaurant_id) (rate(sigmo_issues_reported_total{issue_type=\"critical\"}[24h])) * 86400)",
           "legendFormat": "🔴 Critical – {{restaurant_id}}"
         },
         {
-          "refId": "operational",
           "datasource": "Prometheus",
-          "expr": "sum by (restaurant_id) (increase(sigmo_issues_reported_total{issue_type=\"operational\"}[24h]))",
+          "expr": "round(sum by (restaurant_id) (rate(sigmo_issues_reported_total{issue_type=\"operational\"}[24h])) * 86400)",
           "legendFormat": "🟡 Operational – {{restaurant_id}}"
         }
       ]
@@ -257,8 +270,8 @@
       "id": 10,
       "title": "Photos Submitted (24h)",
       "type": "stat",
-      "gridPos": { "x": 0, "y": 28, "w": 8, "h": 4 },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+      "gridPos": { "x": 0, "y": 27, "w": 8, "h": 4 },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -267,15 +280,16 @@
       },
       "targets": [{
         "datasource": "Prometheus",
-        "expr": "round(sum(rate(sigmo_photos_submitted_total[24h])) * 86400)",
-        "legendFormat": "Photos"
+        "expr": "round(sum by (restaurant_id) (rate(sigmo_photos_submitted_total[24h])) * 86400)",
+        "legendFormat": "{{restaurant_id}}"
       }]
     },
+
     {
       "id": 11,
       "title": "Webhook Avg Response Time",
       "type": "stat",
-      "gridPos": { "x": 8, "y": 28, "w": 8, "h": 4 },
+      "gridPos": { "x": 8, "y": 27, "w": 8, "h": 4 },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": {
         "defaults": {
@@ -296,11 +310,12 @@
         "legendFormat": "Avg latency"
       }]
     },
+
     {
       "id": 12,
       "title": "Webhook Request Rate",
       "type": "stat",
-      "gridPos": { "x": 16, "y": 28, "w": 8, "h": 4 },
+      "gridPos": { "x": 16, "y": 27, "w": 8, "h": 4 },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": {
         "defaults": {
@@ -315,5 +330,6 @@
         "legendFormat": "req/s"
       }]
     }
+
   ]
 }

@@ -33,7 +33,11 @@ from app.services.manager_service import (
     get_today_staff_status,
     resolve_issue,
 )
-from app.services.session_service import save_last_message_id, get_active_session
+from app.services.session_service import (
+    claim_callback,
+    get_active_session,
+    save_last_message_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -240,10 +244,21 @@ async def _handle_callback_query(callback_query: dict) -> None:
 
         # ── Staff: done ────────────────────────────────────────────────────
         if data == "done":
-            await answer_callback_query(callback_id, "✅ Marked as done")
-            # Immediately wipe the inline keyboard BEFORE processing.
-            # This prevents duplicate taps (re-deliveries or fast double-taps)
-            # from firing another delete attempt on the same message_id.
+            # Always acknowledge immediately so Telegram's spinner disappears.
+            await answer_callback_query(callback_id)
+
+            # Idempotency gate — only the first handler to claim this
+            # (chat_id, message_id) pair proceeds. All duplicates are silently
+            # dropped here. The DB unique constraint makes this race-safe.
+            if message_id is None or not await claim_callback(db, chat_id, message_id):
+                # Duplicate delivery — already processed, nothing to do.
+                logger.debug(
+                    "Duplicate done callback ignored for chat %s message %s",
+                    chat_id, message_id,
+                )
+                return
+
+            # First delivery — wipe the keyboard and process normally.
             await edit_message_reply_markup(chat_id, message_id, reply_markup={"inline_keyboard": []})
             await _handle_done(db, chat_id, inline_message_id=message_id)
             return
@@ -322,9 +337,8 @@ async def _handle_done(
 async def _handle_photo(db: AsyncSession, chat_id: str, photo_list: list) -> None:
     file_id = photo_list[-1]["file_id"]
 
-    # The current step message still has ✅ Done / ⚠️ Report Issue buttons.
-    # Wipe them before processing so that any tap that arrives while the photo
-    # is being handled doesn't fire _handle_done against the same message_id.
+    # Wipe the step message buttons before processing so that any Done tap
+    # that arrives while the photo is being handled doesn't race against it.
     session = await get_active_session(db, chat_id)
     if session and session.last_message_id:
         await edit_message_reply_markup(
@@ -340,7 +354,6 @@ async def _handle_photo(db: AsyncSession, chat_id: str, photo_list: list) -> Non
         if result.get("use_buttons"):
             msg_id = await send_step_message(chat_id, result["reply"])
             if msg_id:
-                # Re-fetch session — progress_step may have updated it
                 active = await get_active_session(db, chat_id)
                 if active:
                     await save_last_message_id(db, active, msg_id)

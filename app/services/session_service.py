@@ -3,9 +3,11 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
+from app.models.callback_idempotency import CallbackIdempotency
 from app.models.session import Session
 
 
@@ -109,6 +111,9 @@ async def complete_session(db: AsyncSession, session: Session) -> None:
         .values(status="completed", last_message_id=None, updated_at=datetime.utcnow())
     )
     await db.commit()
+    # Clean up idempotency keys for this chat — session is over, no more
+    # duplicate callbacks can meaningfully arrive for these message IDs.
+    await _clear_idempotency_for_chat(db, session.chat_id)
 
 
 async def abandon_session(db: AsyncSession, session: Session) -> None:
@@ -116,5 +121,40 @@ async def abandon_session(db: AsyncSession, session: Session) -> None:
         update(Session)
         .where(Session.id == session.id)
         .values(status="abandoned", last_message_id=None, updated_at=datetime.utcnow())
+    )
+    await db.commit()
+    # Clean up idempotency keys for this chat — session is over.
+    await _clear_idempotency_for_chat(db, session.chat_id)
+
+
+# ---------------------------------------------------------------------------
+# Idempotency helpers
+# ---------------------------------------------------------------------------
+
+async def claim_callback(
+    db: AsyncSession, chat_id: str, message_id: int
+) -> bool:
+    """Attempt to claim exclusive processing rights for a (chat_id, message_id) pair.
+
+    Returns True if this is the FIRST handler to claim it (proceed normally).
+    Returns False if another handler already claimed it (duplicate — skip processing).
+
+    Uses a DB-level unique constraint so the race is resolved atomically,
+    regardless of how many concurrent coroutines arrive simultaneously.
+    """
+    try:
+        db.add(CallbackIdempotency(chat_id=chat_id, message_id=message_id))
+        await db.commit()
+        return True
+    except IntegrityError:
+        # Unique constraint violated — another handler got here first.
+        await db.rollback()
+        return False
+
+
+async def _clear_idempotency_for_chat(db: AsyncSession, chat_id: str) -> None:
+    """Delete all idempotency rows for a chat_id. Called when session ends."""
+    await db.execute(
+        delete(CallbackIdempotency).where(CallbackIdempotency.chat_id == chat_id)
     )
     await db.commit()

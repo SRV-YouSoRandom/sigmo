@@ -297,10 +297,6 @@ async def _handle_done(
 ) -> None:
     result = await progress_step(db, chat_id, is_photo=False)
 
-    # delete_message_id comes from the engine (session.last_message_id at call
-    # time). inline_message_id is the fallback when the engine has no stored ID.
-    # After the keyboard-wipe fix, we attempt deletion only once here; stale
-    # IDs are now less likely because update_session_step clears last_message_id.
     del_id = result.get("delete_message_id") or inline_message_id
     if del_id:
         await delete_message(chat_id, del_id)
@@ -325,6 +321,16 @@ async def _handle_done(
 
 async def _handle_photo(db: AsyncSession, chat_id: str, photo_list: list) -> None:
     file_id = photo_list[-1]["file_id"]
+
+    # The current step message still has ✅ Done / ⚠️ Report Issue buttons.
+    # Wipe them before processing so that any tap that arrives while the photo
+    # is being handled doesn't fire _handle_done against the same message_id.
+    session = await get_active_session(db, chat_id)
+    if session and session.last_message_id:
+        await edit_message_reply_markup(
+            chat_id, session.last_message_id, reply_markup={"inline_keyboard": []}
+        )
+
     result = await progress_step(db, chat_id, is_photo=True, file_id=file_id)
 
     if result.get("delete_message_id"):
@@ -334,9 +340,10 @@ async def _handle_photo(db: AsyncSession, chat_id: str, photo_list: list) -> Non
         if result.get("use_buttons"):
             msg_id = await send_step_message(chat_id, result["reply"])
             if msg_id:
-                session = await get_active_session(db, chat_id)
-                if session:
-                    await save_last_message_id(db, session, msg_id)
+                # Re-fetch session — progress_step may have updated it
+                active = await get_active_session(db, chat_id)
+                if active:
+                    await save_last_message_id(db, active, msg_id)
         else:
             await send_telegram_message(chat_id, result["reply"], reply_markup=CHECKLIST_KEYBOARD)
 

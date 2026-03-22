@@ -81,10 +81,14 @@ async def save_last_message_id(db: AsyncSession, session: Session, message_id: i
 
 
 async def pause_session(db: AsyncSession, session: Session) -> None:
+    # Also clears last_message_id — the step message buttons are wiped
+    # by the caller before pausing, so there is no valid message to delete
+    # on resume. Clearing here prevents a stale ID from being acted on
+    # if the session object is ever reused after this call.
     await db.execute(
         update(Session)
         .where(Session.id == session.id)
-        .values(status="paused", updated_at=datetime.utcnow())
+        .values(status="paused", last_message_id=None, updated_at=datetime.utcnow())
     )
     await db.commit()
 
@@ -102,7 +106,7 @@ async def complete_session(db: AsyncSession, session: Session) -> None:
     await db.execute(
         update(Session)
         .where(Session.id == session.id)
-        .values(status="completed", updated_at=datetime.utcnow())
+        .values(status="completed", last_message_id=None, updated_at=datetime.utcnow())
     )
     await db.commit()
 
@@ -111,6 +115,6 @@ async def abandon_session(db: AsyncSession, session: Session) -> None:
     await db.execute(
         update(Session)
         .where(Session.id == session.id)
-        .values(status="abandoned", updated_at=datetime.utcnow())
+        .values(status="abandoned", last_message_id=None, updated_at=datetime.utcnow())
     )
     await db.commit()

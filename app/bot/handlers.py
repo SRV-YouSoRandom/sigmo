@@ -98,19 +98,14 @@ async def process_update(data: dict) -> None:
 
         factory = get_async_session()
         async with factory() as db:
-            # Check manager BEFORE normalizing keyboard buttons
-            # so a manager who accidentally taps a checklist button
-            # still gets the manager response, not a checklist flow.
             manager = await get_manager_by_chat_id(db, chat_id)
             if manager:
                 await _handle_manager_message(db, chat_id, text, manager)
                 return
 
-            # Only normalize keyboard buttons for staff
             if text in KEYBOARD_COMMAND_MAP:
                 text = KEYBOARD_COMMAND_MAP[text]
 
-            # Staff: waiting for issue description
             if chat_id in _awaiting_issue_description:
                 issue_type = _awaiting_issue_description.pop(chat_id)
                 await _handle_issue_description(db, chat_id, text, issue_type)
@@ -162,7 +157,6 @@ async def _handle_manager_message(db: AsyncSession, chat_id: str, text: str, man
             await send_telegram_message(chat_id, m["text"], reply_markup=m["reply_markup"])
         return
 
-    # Catch-all — always show manager keyboard, never checklist keyboard
     await send_telegram_message(
         chat_id,
         "Use the buttons below to manage your team.",
@@ -247,12 +241,18 @@ async def _handle_callback_query(callback_query: dict) -> None:
         # ── Staff: done ────────────────────────────────────────────────────
         if data == "done":
             await answer_callback_query(callback_id, "✅ Marked as done")
+            # Immediately wipe the inline keyboard BEFORE processing.
+            # This prevents duplicate taps (re-deliveries or fast double-taps)
+            # from firing another delete attempt on the same message_id.
+            await edit_message_reply_markup(chat_id, message_id, reply_markup={"inline_keyboard": []})
             await _handle_done(db, chat_id, inline_message_id=message_id)
             return
 
         # ── Staff: report issue → show type selection ──────────────────────
         if data == "report_issue":
             await answer_callback_query(callback_id, "⚠️ Select issue type")
+            # Wipe the keyboard so a second tap on ⚠️ Report Issue does nothing.
+            await edit_message_reply_markup(chat_id, message_id, reply_markup={"inline_keyboard": []})
             await send_telegram_message(
                 chat_id,
                 "⚠️ <b>Report Issue</b>\n\nWhat type of issue is this?",
@@ -290,8 +290,6 @@ async def _handle_command(db: AsyncSession, chat_id: str, text: str) -> None:
             await send_telegram_message(chat_id, result["reply"], reply_markup=CHECKLIST_KEYBOARD)
     if result["manager_msg"]:
         await notify_manager(result["manager_chat_id"], result["manager_msg"])
-        # NOTE: checklist_started metric is now incremented inside start_checklist()
-        # in checklist_engine.py — do not increment it here as well
 
 
 async def _handle_done(
@@ -299,6 +297,10 @@ async def _handle_done(
 ) -> None:
     result = await progress_step(db, chat_id, is_photo=False)
 
+    # delete_message_id comes from the engine (session.last_message_id at call
+    # time). inline_message_id is the fallback when the engine has no stored ID.
+    # After the keyboard-wipe fix, we attempt deletion only once here; stale
+    # IDs are now less likely because update_session_step clears last_message_id.
     del_id = result.get("delete_message_id") or inline_message_id
     if del_id:
         await delete_message(chat_id, del_id)

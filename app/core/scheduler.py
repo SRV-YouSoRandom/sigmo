@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timedelta
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from sqlalchemy import Column, Float, LargeBinary, MetaData, String, Table, create_engine
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
@@ -26,13 +27,35 @@ from app.services.report_service import build_summary_message, get_runs_for_yest
 logger = logging.getLogger(__name__)
 
 
+def _ensure_apscheduler_table(url: str) -> None:
+    """Create the apscheduler_jobs table if it doesn't exist.
+
+    APScheduler 3.x does NOT expose .metadata/.engine on the jobstore object,
+    so we create the table ourselves using SQLAlchemy core before the scheduler
+    starts. This is safe to call every startup — CREATE TABLE IF NOT EXISTS
+    is a no-op when the table already exists.
+    """
+    from sqlalchemy import create_engine, MetaData, Table, Column, String, Float, LargeBinary
+    engine = create_engine(url)
+    meta = MetaData()
+    Table(
+        "apscheduler_jobs", meta,
+        Column("id", String(191), primary_key=True),
+        Column("next_run_time", Float, index=True),
+        Column("job_state", LargeBinary, nullable=False),
+    )
+    meta.create_all(engine)
+    engine.dispose()
+
+
 def _build_scheduler() -> AsyncIOScheduler:
     settings = get_settings()
-    jobstore = SQLAlchemyJobStore(url=settings.scheduler_database_url)
-    # Create the apscheduler_jobs table if it doesn't exist yet.
+    # Create the apscheduler_jobs table before initialising the jobstore.
     # APScheduler does NOT use Alembic — it manages this table itself.
-    # Without this, the scheduler spams warnings on every fresh DB or volume reset.
-    jobstore.metadata.create_all(jobstore.engine)
+    # Without this, the scheduler spams UndefinedTable warnings on every
+    # fresh DB or volume reset.
+    _ensure_apscheduler_table(settings.scheduler_database_url)
+    jobstore = SQLAlchemyJobStore(url=settings.scheduler_database_url)
     return AsyncIOScheduler(
         jobstores={"default": jobstore},
         job_defaults={

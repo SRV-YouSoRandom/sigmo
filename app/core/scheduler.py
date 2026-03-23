@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 def _build_scheduler() -> AsyncIOScheduler:
     settings = get_settings()
     jobstore = SQLAlchemyJobStore(url=settings.scheduler_database_url)
+    # Create the apscheduler_jobs table if it doesn't exist yet.
+    # APScheduler does NOT use Alembic — it manages this table itself.
+    # Without this, the scheduler spams warnings on every fresh DB or volume reset.
+    jobstore.metadata.create_all(jobstore.engine)
     return AsyncIOScheduler(
         jobstores={"default": jobstore},
         job_defaults={
@@ -266,8 +270,6 @@ async def _get_restaurant_and_staff(db, restaurant_id: str):
 
 
 async def _any_checklist_started_today(db, restaurant_id: str, checklist_types: set) -> bool:
-    # Use the PHT-aligned day boundary (same as manager_service and report_service)
-    # instead of raw UTC midnight, which was causing follow-ups to silently skip.
     from app.core.config import pht_today_start_utc
     today_start = pht_today_start_utc()
     result = await db.execute(

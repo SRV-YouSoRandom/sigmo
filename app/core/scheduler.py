@@ -11,7 +11,6 @@ import logging
 from datetime import datetime, timedelta
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from sqlalchemy import Column, Float, LargeBinary, MetaData, String, Table, create_engine
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
@@ -30,12 +29,17 @@ logger = logging.getLogger(__name__)
 def _ensure_apscheduler_table(url: str) -> None:
     """Create the apscheduler_jobs table if it doesn't exist.
 
-    APScheduler 3.x does NOT expose .metadata/.engine on the jobstore object,
-    so we create the table ourselves using SQLAlchemy core before the scheduler
-    starts. This is safe to call every startup — CREATE TABLE IF NOT EXISTS
-    is a no-op when the table already exists.
+    Called at startup (inside schedule_restaurant_reminders), NOT at import
+    time — so tests that import this module without a live DB won't fail.
+
+    APScheduler 3.x does not create this table automatically when the DB is
+    fresh (e.g. after a volume reset), so we create it ourselves using
+    SQLAlchemy core. Safe to call every startup — create_all is a no-op when
+    the table already exists.
     """
-    from sqlalchemy import create_engine, MetaData, Table, Column, String, Float, LargeBinary
+    from sqlalchemy import (
+        Column, Float, LargeBinary, MetaData, String, Table, create_engine,
+    )
     engine = create_engine(url)
     meta = MetaData()
     Table(
@@ -49,12 +53,14 @@ def _ensure_apscheduler_table(url: str) -> None:
 
 
 def _build_scheduler() -> AsyncIOScheduler:
+    """Build the scheduler with a persistent SQLAlchemy job store.
+
+    NOTE: _ensure_apscheduler_table is NOT called here because this function
+    runs at module import time and tests run without a live database.
+    The table is created inside schedule_restaurant_reminders() instead,
+    which is only called at application startup.
+    """
     settings = get_settings()
-    # Create the apscheduler_jobs table before initialising the jobstore.
-    # APScheduler does NOT use Alembic — it manages this table itself.
-    # Without this, the scheduler spams UndefinedTable warnings on every
-    # fresh DB or volume reset.
-    _ensure_apscheduler_table(settings.scheduler_database_url)
     jobstore = SQLAlchemyJobStore(url=settings.scheduler_database_url)
     return AsyncIOScheduler(
         jobstores={"default": jobstore},
@@ -72,7 +78,7 @@ scheduler = _build_scheduler()
 
 
 # ---------------------------------------------------------------------------
-# Daily summary – fixed at 08:00 UTC
+# Daily summary – fixed at 16:00 UTC (midnight PHT)
 # ---------------------------------------------------------------------------
 
 async def _send_daily_summary() -> None:
@@ -83,7 +89,6 @@ async def _send_daily_summary() -> None:
         restaurants = result.scalars().all()
         for restaurant in restaurants:
             runs = await get_runs_for_yesterday(db, restaurant.restaurant_id)
-            # Pull issues for yesterday as well
             from app.services.report_service import get_issues_for_yesterday
             issues = await get_issues_for_yesterday(db, restaurant.restaurant_id)
             msg = build_summary_message(runs, issues=issues, restaurant=restaurant)
@@ -100,7 +105,13 @@ async def schedule_restaurant_reminders() -> None:
     Read all restaurants from DB and register/update all jobs in the persistent
     job store. Safe to call again at any time — existing jobs are replaced.
     Also registers the daily summary job if it doesn't exist yet.
+
+    This is also where _ensure_apscheduler_table is called — it runs after
+    the app has fully started and the DB is reachable, not at import time.
     """
+    settings = get_settings()
+    _ensure_apscheduler_table(settings.scheduler_database_url)
+
     # Daily summary — register once, persists across restarts
     _add_or_replace_job(
         "daily_summary",
@@ -141,7 +152,6 @@ def _register_reminders_for_restaurant(restaurant: Restaurant) -> None:
             kwargs={"restaurant_id": rid},
         )
     else:
-        # Remove jobs if reminder time was cleared
         _remove_job_if_exists(f"opening_reminder_{rid}")
         _remove_job_if_exists(f"opening_followup_{rid}")
 
@@ -161,13 +171,11 @@ def _register_reminders_for_restaurant(restaurant: Restaurant) -> None:
             kwargs={"restaurant_id": rid},
         )
     else:
-        # Remove jobs if reminder time was cleared
         _remove_job_if_exists(f"closing_reminder_{rid}")
         _remove_job_if_exists(f"closing_followup_{rid}")
 
 
 def _add_or_replace_job(job_id: str, func, hour: int, minute: int, kwargs: dict) -> None:
-    """Add or replace a cron job in the persistent job store."""
     scheduler.add_job(
         func,
         "cron",
@@ -181,7 +189,6 @@ def _add_or_replace_job(job_id: str, func, hour: int, minute: int, kwargs: dict)
 
 
 def _remove_job_if_exists(job_id: str) -> None:
-    """Remove a job from the store if it exists, silently ignore if not."""
     try:
         scheduler.remove_job(job_id)
         logger.debug("Removed job %s", job_id)
